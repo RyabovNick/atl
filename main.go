@@ -17,7 +17,8 @@ const usage = `atl: read-only Jira and Confluence lookups
   atl search <text> [--space KEY] [--cql] [--limit N] [--json]
 
 KEY defaults to the issue key in the current git branch.
-Config: $ATL_CONFIG or ~/.config/atl/config.ini (mode 600).
+Credentials: JIRA_URL, JIRA_API_TOKEN, CONFLUENCE_URL, CONFLUENCE_API_TOKEN
+(plus *_USERNAME for basic auth), over $ATL_CONFIG or ~/.config/atl/config.ini.
 Exit codes: 0 ok, 1 API or network, 2 usage, 3 config, 4 not found.
 `
 

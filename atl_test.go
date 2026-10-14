@@ -22,7 +22,8 @@ func fakeServer(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 	jsonReply := func(path, body string) {
 		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("Authorization") != "Bearer "+token {
+			user, pass, basic := r.BasicAuth()
+			if r.Header.Get("Authorization") != "Bearer "+token && !(basic && user == "me" && pass == token) {
 				http.Redirect(w, r, "/login.jsp", http.StatusFound)
 				return
 			}
@@ -70,8 +71,18 @@ func fakeServer(t *testing.T) *httptest.Server {
 	return srv
 }
 
+// clearEnv keeps a developer's real credentials out of the tests.
+func clearEnv(t *testing.T) {
+	for _, svc := range []string{"JIRA", "CONFLUENCE"} {
+		for _, v := range []string{"_URL", "_API_TOKEN", "_USERNAME"} {
+			t.Setenv(svc+v, "")
+		}
+	}
+}
+
 func writeConfig(t *testing.T, body string, mode os.FileMode) {
 	t.Helper()
+	clearEnv(t)
 	path := filepath.Join(t.TempDir(), "config.ini")
 	if err := os.WriteFile(path, []byte(body), mode); err != nil {
 		t.Fatal(err)
@@ -230,5 +241,44 @@ func TestTinyRoundTrip(t *testing.T) {
 		if err != nil || got != strconv.FormatUint(id, 10) {
 			t.Errorf("%d via %s: got %s, %v", id, code, got, err)
 		}
+	}
+}
+
+func TestEnvOnly(t *testing.T) {
+	srv := fakeServer(t)
+	clearEnv(t)
+	t.Setenv("ATL_CONFIG", filepath.Join(t.TempDir(), "absent.ini"))
+	t.Setenv("JIRA_URL", srv.URL+"/jira")
+	t.Setenv("JIRA_API_TOKEN", token)
+	t.Setenv("CONFLUENCE_URL", srv.URL+"/wiki")
+	t.Setenv("CONFLUENCE_API_TOKEN", token)
+	out, errs, code := runAtl(t, "issue", "PROJ-123")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	mustContain(t, out, "# PROJ-123: Fix login", "(description)")
+	if _, errs, code := runAtl(t, "page", "42"); code != 0 {
+		t.Fatalf("page: exit %d: %s", code, errs)
+	}
+
+	t.Setenv("JIRA_USERNAME", "me")
+	if _, errs, code := runAtl(t, "issue", "PROJ-123"); code != 0 {
+		t.Fatalf("basic auth via JIRA_USERNAME: exit %d: %s", code, errs)
+	}
+	t.Setenv("JIRA_USERNAME", "")
+
+	t.Setenv("JIRA_API_TOKEN", "")
+	if _, errs, code := runAtl(t, "issue", "PROJ-123"); code != exitConfig || !strings.Contains(errs, "JIRA_API_TOKEN") {
+		t.Errorf("missing token: exit %d, %s", code, errs)
+	}
+}
+
+func TestEnvOverridesFile(t *testing.T) {
+	srv := fakeServer(t)
+	writeConfig(t, "[jira]\nurl = http://127.0.0.1:1/nowhere\ntoken = wrong\n", 0o600)
+	t.Setenv("JIRA_URL", srv.URL+"/jira")
+	t.Setenv("JIRA_API_TOKEN", token)
+	if _, errs, code := runAtl(t, "issue", "PROJ-123"); code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
 	}
 }

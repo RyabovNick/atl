@@ -5,8 +5,9 @@ agents, plus the opencode skill that tells an agent when to use them.
 
 ```bash
 make install          # vet, test, build to ~/.local/bin/atl, install the skill
-mkdir -p ~/.config/atl && install -m 600 config.example.ini ~/.config/atl/config.ini
-$EDITOR ~/.config/atl/config.ini
+export JIRA_URL=https://jira.example.com JIRA_API_TOKEN=...
+export CONFLUENCE_URL=https://confluence.example.com CONFLUENCE_API_TOKEN=...
+# or: install -m 600 config.example.ini ~/.config/atl/config.ini and edit it
 atl issue PROJ-123    # first real check
 ```
 
@@ -16,9 +17,10 @@ atl issue PROJ-123    # first real check
 | `atl page <id\|url>` | a page as Markdown; accepts `pageId=`, `/pages/<id>`, `/display/SPACE/Title` and `/x/<tiny>` URLs |
 | `atl search <text>` | pages and blog posts matching `text ~`, or raw CQL with `--cql` |
 
-Tokens are sent as `Authorization: Bearer` unless a section sets
-`auth = basic` with a `username`. atl refuses a config file other users can
-read, and reports a redirect instead of following it, because Data Center
+Environment variables override the config file, which is optional when they
+supply the URL and token. Tokens are sent as `Authorization: Bearer`; a
+username (`JIRA_USERNAME`, or `username` in the file) switches to basic auth.
+atl refuses a config file other users can read, and reports a redirect instead of following it, because Data Center
 answers a rejected token by redirecting to its login page.
 
 `go test ./...` runs against a fake Jira and Confluence; no instance or token

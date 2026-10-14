@@ -6,7 +6,8 @@ description: Read Jira issues and Confluence pages with the read-only `atl` CLI.
 # Jira and Confluence via `atl`
 
 `atl` reads the company's Jira and Confluence Data Center. It cannot change
-anything, and it loads its own credentials: never read its config file, ask
+anything, and it loads its own credentials from the environment or its config
+file: never print `JIRA_*`/`CONFLUENCE_*` variables, read the config file, ask
 for a token, or call the REST API with curl.
 
 ## Commands

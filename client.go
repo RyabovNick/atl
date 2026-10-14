@@ -5,8 +5,10 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -64,11 +66,15 @@ func parseINI(data string) (map[string]map[string]string, error) {
 	return cfg, nil
 }
 
+// loadConfig reads the optional config file; a missing file is an empty config.
 func loadConfig() (map[string]map[string]string, error) {
 	path := configPath()
 	info, err := os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return map[string]map[string]string{}, nil
+	}
 	if err != nil {
-		return nil, fail(exitConfig, "no config at %s; start from config.example.ini", path)
+		return nil, fail(exitConfig, "%v", err)
 	}
 	// The file holds tokens; refusing a readable one is cheaper than leaking it.
 	if info.Mode().Perm()&0o077 != 0 {
@@ -85,13 +91,35 @@ func loadConfig() (map[string]map[string]string, error) {
 	return cfg, nil
 }
 
+// envPrefix maps a config section to its variables: jira -> JIRA_URL, JIRA_API_TOKEN, JIRA_USERNAME.
+func envPrefix(name string) string { return strings.ToUpper(name) + "_" }
+
+// settings is a service's config section with its environment variables on top.
+func settings(name string) (map[string]string, error) {
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	s := map[string]string{}
+	for k, v := range cfg[name] {
+		s[k] = v
+	}
+	p := envPrefix(name)
+	for key, env := range map[string]string{"url": p + "URL", "token": p + "API_TOKEN", "username": p + "USERNAME"} {
+		if v := os.Getenv(env); v != "" {
+			s[key] = v
+		}
+	}
+	return s, nil
+}
+
 // optionalBaseURL lets `issue` recognise Confluence links without requiring Confluence credentials.
 func optionalBaseURL(name string) string {
-	cfg, err := loadConfig()
+	s, err := settings(name)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimRight(cfg[name]["url"], "/")
+	return strings.TrimRight(s["url"], "/")
 }
 
 type client struct {
@@ -104,21 +132,29 @@ type client struct {
 }
 
 func newClient(name string) (*client, error) {
-	cfg, err := loadConfig()
+	s, err := settings(name)
 	if err != nil {
 		return nil, err
 	}
-	s := cfg[name]
 	if s["url"] == "" || s["token"] == "" {
-		return nil, fail(exitConfig, "[%s] needs url and token in %s", name, configPath())
+		p := envPrefix(name)
+		return nil, fail(exitConfig, "%s needs a URL and token: set %sURL and %sAPI_TOKEN, or url and token under [%s] in %s",
+			name, p, p, name, configPath())
 	}
 	c := &client{name: name, base: strings.TrimRight(s["url"], "/"), header: http.Header{"Accept": {"application/json"}}}
-	switch mode := s["auth"]; mode {
-	case "", "bearer":
+	mode := s["auth"]
+	if mode == "" {
+		mode = "bearer"
+		if s["username"] != "" {
+			mode = "basic"
+		}
+	}
+	switch mode {
+	case "bearer":
 		c.header.Set("Authorization", "Bearer "+s["token"])
 	case "basic":
 		if s["username"] == "" {
-			return nil, fail(exitConfig, "[%s] auth = basic needs username", name)
+			return nil, fail(exitConfig, "%s: basic auth needs a username (%sUSERNAME or username under [%s])", name, envPrefix(name), name)
 		}
 		c.user, c.pass = s["username"], s["token"]
 	default:
