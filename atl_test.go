@@ -283,6 +283,9 @@ func fakeServer(t *testing.T) *httptest.Server {
 			fmt.Fprint(w, `{"results":[],"size":0,"_links":{}}`)
 		}
 	})
+	jsonReply("/jira/rest/api/2/myself", `{"name":"ann","key":"ann","displayName":"Ann","emailAddress":"ann@example.com"}`)
+	jsonReply("/jira/rest/api/2/serverInfo", `{"baseUrl":"BASE/jira","version":"9.12.3","deploymentType":"Server"}`)
+	jsonReply("/wiki/rest/api/user/current", `{"type":"known","username":"ann","userKey":"k1","displayName":"Ann"}`)
 	mux.HandleFunc("/", http.NotFound)
 
 	srv = httptest.NewServer(mux)

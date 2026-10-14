@@ -8,64 +8,80 @@ make install          # vet, test, build to ~/.local/bin/atl, install the skill
 export JIRA_URL=https://jira.example.com JIRA_API_TOKEN=...
 export CONFLUENCE_URL=https://confluence.example.com CONFLUENCE_API_TOKEN=...
 # or: install -m 600 config.example.ini ~/.config/atl/config.ini and edit it
-atl issue PROJ-123    # first real check
+atl doctor            # where each setting comes from; does each service accept its token
 ```
+
+## Commands
+
+`KEY` defaults to the issue key in the current git branch
+(`feature/PROJ-123-x` → `PROJ-123`). Every command takes `--json`: the raw API
+response, or for `attachment` and `doctor` their own report.
 
 | Command | Returns |
 | --- | --- |
-| `atl issue [KEY]` | fields, custom fields by name, open blockers, linked issues (one level), subtasks, attachments, Confluence and other links; KEY defaults to the current branch's |
-| `atl jql <query>` | issues matching JQL with status, assignee and update time; says how many more exist |
-| `atl epic [KEY]` | an epic and the issues under it, grouped by status category; a non-epic KEY resolves to its epic or parent |
-| `atl history [KEY]` | who changed which field and when, oldest first; `--since 2026-10-01` or `--since 7d` narrows it |
-| `atl attachment [KEY \| ID...]` | downloads all of an issue's attachments, or the given Jira ids / Confluence `att<digits>` ids, and prints the saved paths |
-| `atl page <id\|url>` | a page as Markdown, with its attachments; accepts `pageId=`, `/pages/<id>`, `/display/SPACE/Title` and `/x/<tiny>` URLs |
-| `atl page <ref> --toc` | the page's headings, indented by level, with each section's size in characters |
+| `atl issue [KEY] [--comments]` | fields, custom fields by name, open blockers, linked issues (one level), subtasks, attachments, Confluence and other links |
+| `atl jql <query> [--limit 20]` | issues matching JQL with status, assignee and update time; says how many more exist |
+| `atl epic [KEY] [--limit 50]` | an epic and the issues under it, grouped by status category; a non-epic `KEY` resolves to its epic or parent |
+| `atl history [KEY] [--since 2026-10-01\|7d\|48h]` | who changed which field and when, oldest first |
+| `atl attachment [KEY \| ID...] [--dir D] [--max-bytes N]` | downloads an issue's attachments, or the given Jira ids / Confluence `att<digits>` ids, and prints the saved paths |
+| `atl page <id\|url> [--max-chars 40000]` | a page as Markdown, with its attachments; accepts `pageId=`, `/pages/<id>`, `/display/SPACE/Title` and `/x/<tiny>` URLs |
+| `atl page <ref> --toc` | the page's headings, indented, with each section's size in characters |
 | `atl page <ref> --section <heading>` | only the matching sections, subsections included; repeatable |
-| `atl page <ref> --children [--depth 2]` | child pages with id, update time and URL, instead of the body |
-| `atl search <text>` | pages and blog posts matching `text ~`, or raw CQL with `--cql` |
+| `atl page <ref> --children [--depth 1-3]` | child pages with id, update time and URL, instead of the body |
+| `atl search <text> [--space KEY] [--cql] [--limit 10]` | pages and blog posts matching `text ~`, or raw CQL |
+| `atl doctor` | each setting and its source, then a login check per service |
 
-`atl issue` renders the description, long custom text fields and comments
-from Jira's rendered HTML into Markdown, falling back to raw wiki markup when
-Jira returns none. Custom fields with no readable value (rank, epic colour,
-development summary, bare ids) are left out.
+Exit codes: `0` ok, `1` API or network, `2` usage or a query Jira/Confluence
+rejected (the server's message is shown), `3` config, `4` not found.
+`atl doctor` exits `0` when every configured service authenticates, `1` when a
+check fails, and `3` when nothing could be checked (nothing configured, or the
+config file is unusable).
 
-HTML becomes Markdown with GitHub-style tables; a heading inside a table cell
-becomes bold text, since a Markdown table cannot hold one. Headings inside
-embedded content are shifted down to nest under atl's own sections: a page's
-headings start at `##` under its `# Title`, and a description's at `###`
-under `## Description`.
+## Output
 
-`atl page --section` matches headings case-insensitively: every section with
-exactly that title, otherwise a unique prefix, otherwise a unique substring.
-An ambiguous match exits 2 and no match exits 4, both listing the headings.
-`--toc` and `--section` combine (outline, then sections), and so do either of
-them with `--children`, which on its own skips the body. `--max-chars` applies
-to whatever body text is printed. `--children` follows pagination and stops at
-500 pages.
+- **Rich text.** Descriptions, long custom text fields, comments and pages
+  are rendered HTML converted to Markdown, with GitHub-style tables. Jira
+  text falls back to raw wiki markup when Jira returns no rendered HTML.
+  Embedded headings are shifted to nest under atl's own sections.
+- **Custom fields.** Short values go under `## Fields`; long text such as
+  acceptance criteria gets its own section. Fields with no readable value
+  (rank, epic colour, development summary, bare ids) are left out.
+- **Sections.** `--section` matches case-insensitively: every section with
+  exactly that title, else a unique prefix, else a unique substring. An
+  ambiguous match exits 2, no match exits 4, both listing the headings.
+- **Epics.** Children are `"Epic Link" = KEY OR parent = KEY` when the
+  instance has the Epic Link field, `parent = KEY` otherwise.
+- **History.** Long text edits show their size change and a line diff capped
+  at 20 lines; rank changes are dropped; a changelog Jira truncated is marked
+  partial. `atl issue` does not fetch the changelog.
 
-`atl epic` finds children with `"Epic Link" = KEY OR parent = KEY` when the
-instance has the Epic Link field, and `parent = KEY` otherwise. A query Jira or
-Confluence rejects exits 2 with the server's error messages.
+## Configuration and auth
 
-`atl history` reads the issue's changelog. Long text edits (description,
-long custom fields) show their size change and a line diff capped at 20
-lines, instead of both versions; rank changes are left out. When Jira returns
-fewer changes than the changelog's total, the output says the history is
-partial. `atl issue` does not fetch the changelog, so it stays small.
+`JIRA_URL`, `JIRA_API_TOKEN`, `JIRA_USERNAME` and their `CONFLUENCE_*`
+equivalents override `$ATL_CONFIG` or `~/.config/atl/config.ini`, which is
+optional when they supply the URL and token; see
+[config.example.ini](config.example.ini) for the other settings (`auth`,
+`ca_bundle`, `timeout`). Tokens are sent as `Authorization: Bearer`; a
+username switches to basic auth.
 
-`atl attachment` saves into `--dir` or a new `atl-attachments-*` directory
-under the system temp dir, as mode 0600 files that never overwrite an existing
-one (`log.txt` becomes `log-1.txt`). Server-supplied names lose path separators
-and leading dots. Files over `--max-bytes` (50 MiB by default) are refused,
-whatever the server claims their size is. The token is sent only to the
-configured host: a download link or redirect pointing anywhere else is
-refused rather than followed.
+Data Center rarely says "wrong token" plainly: Jira redirects to its login
+page, and Confluence answers as an anonymous user, so a restricted page looks
+"not found". atl reports the redirect instead of following it, and
+`atl doctor` detects the anonymous user.
 
-Environment variables override the config file, which is optional when they
-supply the URL and token. Tokens are sent as `Authorization: Bearer`; a
-username (`JIRA_USERNAME`, or `username` in the file) switches to basic auth.
-atl refuses a config file other users can read, and reports a redirect instead of following it, because Data Center
-answers a rejected token by redirecting to its login page.
+## Security properties
+
+- No write verbs: nothing in atl can change Jira or Confluence.
+- The token goes only to the configured scheme and host. Download links and
+  redirects anywhere else are refused, not followed.
+- atl refuses a config file other users can read. `atl doctor` reports a
+  token only as set or unset.
+- Attachments are streamed to 0600 files that never overwrite an existing
+  one, under `--dir` or a new `atl-attachments-*` temp directory. Names lose
+  path separators and leading dots, and files over `--max-bytes` (50 MiB by
+  default) are refused, whatever size the server claims.
+
+## Testing
 
 `go test ./...` runs against a fake Jira and Confluence; no instance or token
-is needed.
+is needed. `go test -cover ./...` reports coverage.

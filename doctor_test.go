@@ -1,0 +1,178 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestDoctorAllOK(t *testing.T) {
+	setup(t)
+	out, errs, code := runAtl(t, "doctor")
+	if code != 0 {
+		t.Fatalf("exit %d: %s\n%s", code, errs, out)
+	}
+	mustContain(t, out,
+		"(mode 600)",
+		"token      set (config file)",
+		"username   unset",
+		"auth       bearer (default)",
+		"timeout    30 (default)",
+		"✓ jira: authenticated as Ann (ann, ann@example.com) — Jira 9.12.3 Server",
+		"✓ confluence: authenticated as Ann (ann)",
+	)
+	if strings.Contains(out, token) || strings.Contains(out, "  ! ") {
+		t.Errorf("unexpected token or warning in output:\n%s", out)
+	}
+}
+
+func TestDoctorEnvAndOneFailing(t *testing.T) {
+	srv := fakeServer(t)
+	clearEnv(t)
+	t.Setenv("ATL_CONFIG", filepath.Join(t.TempDir(), "absent.ini"))
+	const wrong = "wrong-secret-value"
+	t.Setenv("JIRA_URL", srv.URL+"/jira")
+	t.Setenv("JIRA_API_TOKEN", wrong)
+	t.Setenv("CONFLUENCE_URL", srv.URL+"/wiki")
+	t.Setenv("CONFLUENCE_API_TOKEN", token)
+	t.Setenv("CONFLUENCE_USERNAME", "me")
+	out, errs, code := runAtl(t, "doctor")
+	if code != exitAPI {
+		t.Fatalf("exit %d: %s\n%s", code, errs, out)
+	}
+	mustContain(t, out,
+		"(not present; environment variables only)",
+		"url        "+srv.URL+"/jira (JIRA_URL)",
+		"token      set (JIRA_API_TOKEN)",
+		"username   me (CONFLUENCE_USERNAME)",
+		"auth       basic (default, because a username is set)",
+		"✗ jira: ",
+		"redirected to /login.jsp",
+		"✓ confluence: authenticated as Ann (ann)",
+	)
+	if strings.Contains(out+errs, wrong) || strings.Contains(out+errs, token) {
+		t.Errorf("a token leaked into the output:\n%s%s", out, errs)
+	}
+}
+
+// miniServer answers fixed JSON without checking credentials, for responses
+// the shared fake server does not model.
+func miniServer(t *testing.T, replies map[string]string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	for path, body := range replies {
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, body)
+		})
+	}
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestDoctorAnonymousAndBaseURLMismatch(t *testing.T) {
+	srv := miniServer(t, map[string]string{
+		"/jira/rest/api/2/myself":     `{"name":"ann","displayName":"Ann"}`,
+		"/jira/rest/api/2/serverInfo": `{"baseUrl":"https://jira.public.example","version":"9.4.0","deploymentType":"Server"}`,
+		"/wiki/rest/api/user/current": `{"type":"anonymous","displayName":"Anonymous"}`,
+	})
+	writeConfig(t, fmt.Sprintf("[jira]\nurl = %[1]s/jira\ntoken = t1\n[confluence]\nurl = %[1]s/wiki\ntoken = t2\n", srv.URL), 0o600)
+	out, _, code := runAtl(t, "doctor")
+	if code != exitAPI {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	mustContain(t, out,
+		"✓ jira: authenticated as Ann (ann) — Jira 9.4.0 Server",
+		"! Jira's base URL is https://jira.public.example but atl is configured with "+srv.URL+"/jira",
+		"✗ confluence: answered as an anonymous user",
+	)
+}
+
+func TestDoctorWithoutServerInfo(t *testing.T) {
+	srv := miniServer(t, map[string]string{"/jira/rest/api/2/myself": `{"key":"JIRAUSER1"}`})
+	writeConfig(t, fmt.Sprintf("[jira]\nurl = %s/jira\ntoken = t1\n", srv.URL), 0o600)
+	out, _, code := runAtl(t, "doctor")
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	mustContain(t, out, "✓ jira: authenticated as JIRAUSER1\n", "! server info unavailable: ", "- confluence: not configured")
+}
+
+func TestDoctorConfigProblems(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("ATL_CONFIG", filepath.Join(t.TempDir(), "absent.ini"))
+	out, _, code := runAtl(t, "doctor")
+	if code != exitConfig {
+		t.Errorf("nothing configured: exit %d", code)
+	}
+	mustContain(t, out, "- jira: not configured", "- confluence: not configured", "Nothing is configured")
+
+	writeConfig(t, "[jira]\nurl = http://127.0.0.1:1\ntoken = secret-in-file\n", 0o644)
+	out, _, code = runAtl(t, "doctor")
+	if code != exitConfig {
+		t.Errorf("readable config: exit %d", code)
+	}
+	mustContain(t, out, "chmod 600", "✗ jira: ", "✗ confluence: ")
+	if strings.Contains(out, "secret-in-file") || strings.Contains(out, "Nothing is configured") {
+		t.Errorf("unexpected output:\n%s", out)
+	}
+
+	srv := fakeServer(t)
+	writeConfig(t, fmt.Sprintf("[confluence]\nurl = %s/wiki\ntoken = %s\n", srv.URL, token), 0o600)
+	t.Setenv("JIRA_URL", srv.URL+"/jira")
+	out, _, code = runAtl(t, "doctor")
+	if code != exitAPI {
+		t.Errorf("half-configured jira: exit %d", code)
+	}
+	mustContain(t, out, "✗ jira: jira needs a URL and token", "token      unset", "✓ confluence")
+
+	if _, _, code := runAtl(t, "doctor", "extra"); code != exitUsage {
+		t.Errorf("doctor with an argument: exit %d", code)
+	}
+}
+
+func TestDoctorJSON(t *testing.T) {
+	setup(t)
+	out, errs, code := runAtl(t, "doctor", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	var report struct {
+		ConfigFile fileStatus      `json:"config_file"`
+		Services   []serviceReport `json:"services"`
+		Exit       int             `json:"exit"`
+	}
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("%v:\n%s", err, out)
+	}
+	if !report.ConfigFile.Exists || report.ConfigFile.Mode != "600" || len(report.Services) != 2 || report.Exit != 0 {
+		t.Errorf("report = %+v", report)
+	}
+	jira := report.Services[0]
+	if !jira.OK || jira.Server == nil || jira.Server.Version != "9.12.3" || jira.User == nil || jira.User.Email != "ann@example.com" {
+		t.Errorf("jira = %+v", jira)
+	}
+	if jira.Settings[1].Key != "token" || jira.Settings[1].Value != "set" || strings.Contains(out, token) {
+		t.Errorf("token must be reported only as set:\n%s", out)
+	}
+
+	clearEnv(t)
+	t.Setenv("ATL_CONFIG", filepath.Join(t.TempDir(), "absent.ini"))
+	out, _, code = runAtl(t, "doctor", "--json")
+	if code != exitConfig || !strings.Contains(out, `"exit": 3`) {
+		t.Errorf("nothing configured as JSON: exit %d\n%s", code, out)
+	}
+}
+
+func TestConfluenceNotFoundHint(t *testing.T) {
+	setup(t)
+	_, errs, code := runAtl(t, "page", "99999")
+	if code != exitNotFound || !strings.Contains(errs, "atl doctor") {
+		t.Errorf("exit %d: %s", code, errs)
+	}
+}

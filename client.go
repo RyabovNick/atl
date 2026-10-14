@@ -229,6 +229,10 @@ func (c *client) get(path string, params url.Values, out any) ([]byte, error) {
 	case code == 401 || code == 403:
 		return nil, fail(exitAPI, "%s: HTTP %d on %s; check the token and auth mode in %s", c.name, code, path, configPath())
 	case code == 404:
+		// Confluence serves a rejected token as an anonymous user, who cannot see restricted pages.
+		if c.name == "confluence" {
+			return nil, fail(exitNotFound, "%s: not found: %s (a rejected token looks the same; atl doctor tells them apart)", c.name, path)
+		}
 		return nil, fail(exitNotFound, "%s: not found: %s", c.name, path)
 	case code >= 300 && code < 400:
 		return nil, fail(exitAPI, "%s: %s redirected to %s; the token was probably not accepted", c.name, path, resp.Header.Get("Location"))

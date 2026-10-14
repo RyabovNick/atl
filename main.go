@@ -23,6 +23,9 @@ const usage = `atl: read-only Jira and Confluence lookups
                                               Confluence page as Markdown, its outline,
                                               chosen sections, or its child pages
   atl search <text> [--space KEY] [--cql] [--limit N] [--json]
+                                              Confluence pages and blog posts
+  atl doctor [--json]                         where each setting comes from, and
+                                              whether each service accepts its token
 
 KEY defaults to the issue key in the current git branch.
 Credentials: JIRA_URL, JIRA_API_TOKEN, CONFLUENCE_URL, CONFLUENCE_API_TOKEN
@@ -72,6 +75,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		"page":       cmdPage,
 		"attachment": cmdAttachment,
 		"search":     cmdSearch,
+		"doctor":     cmdDoctor,
 	}
 	cmd, ok := commands[args[0]]
 	if !ok {
