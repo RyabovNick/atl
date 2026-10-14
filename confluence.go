@@ -179,6 +179,12 @@ func cmdPage(args []string, stdout, stderr io.Writer) error {
 		body = fmt.Sprintf("%s\n\n[truncated at %d of %d characters; --max-chars 0 for all]", string(runes[:*maxChars]), *maxChars, len(runes))
 	}
 	fmt.Fprintln(&b, or(body, "(empty page)"))
+	// Attachments are context; a page whose attachments cannot be listed still prints.
+	if atts, err := pageAttachments(conf, p.ID); err != nil {
+		fmt.Fprintf(&b, "\n(attachments unavailable: %v)\n", err)
+	} else {
+		writeAttachments(&b, atts, "atl attachment <id>")
+	}
 	_, err = io.WriteString(stdout, b.String())
 	return err
 }

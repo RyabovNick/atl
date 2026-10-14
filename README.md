@@ -13,10 +13,11 @@ atl issue PROJ-123    # first real check
 
 | Command | Returns |
 | --- | --- |
-| `atl issue [KEY]` | fields, custom fields by name, open blockers, linked issues (one level), subtasks, Confluence and other links; KEY defaults to the current branch's |
+| `atl issue [KEY]` | fields, custom fields by name, open blockers, linked issues (one level), subtasks, attachments, Confluence and other links; KEY defaults to the current branch's |
 | `atl jql <query>` | issues matching JQL with status, assignee and update time; says how many more exist |
 | `atl epic [KEY]` | an epic and the issues under it, grouped by status category; a non-epic KEY resolves to its epic or parent |
-| `atl page <id\|url>` | a page as Markdown; accepts `pageId=`, `/pages/<id>`, `/display/SPACE/Title` and `/x/<tiny>` URLs |
+| `atl attachment [KEY \| ID...]` | downloads all of an issue's attachments, or the given Jira ids / Confluence `att<digits>` ids, and prints the saved paths |
+| `atl page <id\|url>` | a page as Markdown, with its attachments; accepts `pageId=`, `/pages/<id>`, `/display/SPACE/Title` and `/x/<tiny>` URLs |
 | `atl search <text>` | pages and blog posts matching `text ~`, or raw CQL with `--cql` |
 
 `atl issue` renders the description, long custom text fields and comments
@@ -27,6 +28,14 @@ development summary, bare ids) are left out.
 `atl epic` finds children with `"Epic Link" = KEY OR parent = KEY` when the
 instance has the Epic Link field, and `parent = KEY` otherwise. A query Jira or
 Confluence rejects exits 2 with the server's error messages.
+
+`atl attachment` saves into `--dir` or a new `atl-attachments-*` directory
+under the system temp dir, as mode 0600 files that never overwrite an existing
+one (`log.txt` becomes `log-1.txt`). Server-supplied names lose path separators
+and leading dots. Files over `--max-bytes` (50 MiB by default) are refused,
+whatever the server claims their size is. The token is sent only to the
+configured host: a download link or redirect pointing anywhere else is
+refused rather than followed.
 
 Environment variables override the config file, which is optional when they
 supply the URL and token. Tokens are sent as `Authorization: Bearer`; a

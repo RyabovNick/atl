@@ -15,6 +15,8 @@ const usage = `atl: read-only Jira and Confluence lookups
   atl issue [KEY] [--comments] [--json]       issue, custom fields, links, Confluence refs
   atl jql <query> [--limit N] [--json]        Jira issues matching JQL
   atl epic [KEY] [--limit N] [--json]         issues under an epic, by status
+  atl attachment [KEY | ID...] [--dir DIR] [--max-bytes N] [--json]
+                                              download attachments, print saved paths
   atl page <id|url> [--max-chars N] [--json]  Confluence page as Markdown
   atl search <text> [--space KEY] [--cql] [--limit N] [--json]
 
@@ -59,11 +61,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	commands := map[string]func([]string, io.Writer, io.Writer) error{
-		"issue":  cmdIssue,
-		"jql":    cmdJQL,
-		"epic":   cmdEpic,
-		"page":   cmdPage,
-		"search": cmdSearch,
+		"issue":      cmdIssue,
+		"jql":        cmdJQL,
+		"epic":       cmdEpic,
+		"page":       cmdPage,
+		"attachment": cmdAttachment,
+		"search":     cmdSearch,
 	}
 	cmd, ok := commands[args[0]]
 	if !ok {

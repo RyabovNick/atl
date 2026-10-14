@@ -251,6 +251,78 @@ func (c *client) get(path string, params url.Values, out any) ([]byte, error) {
 	return body, nil
 }
 
+func (c *client) sameHost(u *url.URL) bool {
+	base, err := url.Parse(c.base)
+	return err == nil && u.Scheme == base.Scheme && strings.EqualFold(u.Host, base.Host)
+}
+
+// download streams ref (absolute, or relative to the base URL) into dst, at most maxBytes.
+// The token is only ever sent to the configured host: absolute URLs and redirects
+// elsewhere are refused rather than followed.
+func (c *client) download(ref string, dst io.Writer, maxBytes int64) (int64, error) {
+	target := ref
+	if strings.HasPrefix(ref, "/") {
+		target = c.base + ref
+	}
+	u, err := url.Parse(target)
+	if err != nil || !u.IsAbs() {
+		return 0, fail(exitAPI, "%s: bad download link %q", c.name, ref)
+	}
+	if !c.sameHost(u) {
+		return 0, fail(exitAPI, "%s: refusing to send the token to %s://%s, which is not %s", c.name, u.Scheme, u.Host, c.base)
+	}
+	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	if err != nil {
+		return 0, fail(exitAPI, "%s: %v", c.name, err)
+	}
+	req.Header = c.header.Clone()
+	req.Header.Set("Accept", "*/*")
+	if c.user != "" {
+		req.SetBasicAuth(c.user, c.pass)
+	}
+	hc := &http.Client{
+		Transport: c.http.Transport,
+		Timeout:   10 * c.http.Timeout,
+		CheckRedirect: func(next *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return errors.New("too many redirects")
+			}
+			if !c.sameHost(next.URL) {
+				return fmt.Errorf("refusing redirect to another host, %s", next.URL.Host)
+			}
+			return nil
+		},
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return 0, fail(exitAPI, "%s: %v", c.name, err)
+	}
+	defer resp.Body.Close()
+	// Followed redirects can end on the login page, which Data Center serves with a 200.
+	if strings.Contains(strings.ToLower(resp.Request.URL.Path), "login") {
+		return 0, fail(exitAPI, "%s: download redirected to the login page; the token was probably not accepted", c.name)
+	}
+	switch code := resp.StatusCode; {
+	case code == 401 || code == 403:
+		return 0, fail(exitAPI, "%s: HTTP %d downloading %s; check the token", c.name, code, u.Path)
+	case code == 404:
+		return 0, fail(exitNotFound, "%s: not found: %s", c.name, u.Path)
+	case code >= 300:
+		return 0, fail(exitAPI, "%s: HTTP %d downloading %s", c.name, code, u.Path)
+	}
+	if resp.ContentLength > maxBytes {
+		return 0, fail(exitAPI, "%s: %s is %d bytes, over the %d-byte limit; raise --max-bytes", c.name, u.Path, resp.ContentLength, maxBytes)
+	}
+	n, err := io.Copy(dst, io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return n, fail(exitAPI, "%s: downloading %s: %v", c.name, u.Path, err)
+	}
+	if n > maxBytes {
+		return n, fail(exitAPI, "%s: %s is over the %d-byte limit; raise --max-bytes", c.name, u.Path, maxBytes)
+	}
+	return n, nil
+}
+
 // badRequestMessage extracts the reason from a 400 body: Jira sends errorMessages
 // and per-field errors, Confluence a single message. Bad JQL and CQL land here.
 func badRequestMessage(body []byte) string {

@@ -62,22 +62,23 @@ type comment struct {
 type issue struct {
 	Key    string `json:"key"`
 	Fields struct {
-		Summary     string      `json:"summary"`
-		Description string      `json:"description"`
-		Created     string      `json:"created"`
-		Updated     string      `json:"updated"`
-		Status      *status     `json:"status"`
-		IssueType   *named      `json:"issuetype"`
-		Priority    *named      `json:"priority"`
-		Resolution  *named      `json:"resolution"`
-		Assignee    *named      `json:"assignee"`
-		Reporter    *named      `json:"reporter"`
-		Labels      []string    `json:"labels"`
-		Components  []named     `json:"components"`
-		FixVersions []named     `json:"fixVersions"`
-		IssueLinks  []issueLink `json:"issuelinks"`
-		Subtasks    []issueRef  `json:"subtasks"`
-		Parent      *issueRef   `json:"parent"`
+		Summary     string       `json:"summary"`
+		Description string       `json:"description"`
+		Created     string       `json:"created"`
+		Updated     string       `json:"updated"`
+		Status      *status      `json:"status"`
+		IssueType   *named       `json:"issuetype"`
+		Priority    *named       `json:"priority"`
+		Resolution  *named       `json:"resolution"`
+		Assignee    *named       `json:"assignee"`
+		Reporter    *named       `json:"reporter"`
+		Labels      []string     `json:"labels"`
+		Components  []named      `json:"components"`
+		FixVersions []named      `json:"fixVersions"`
+		IssueLinks  []issueLink  `json:"issuelinks"`
+		Subtasks    []issueRef   `json:"subtasks"`
+		Parent      *issueRef    `json:"parent"`
+		Attachment  []attachment `json:"attachment"`
 		Comment     struct {
 			Comments []comment `json:"comments"`
 		} `json:"comment"`
@@ -356,6 +357,8 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 			line("- %s", issueLine(&f.Subtasks[i]))
 		}
 	}
+
+	writeAttachments(&b, f.Attachment, "atl attachment "+is.Key+" for all, or atl attachment <id>")
 
 	pages, others := confluenceRefs(&is, links, optionalBaseURL("confluence"))
 	writeRefs := func(heading string, refs []ref) {

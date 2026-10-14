@@ -45,7 +45,7 @@ func fakeServer(t *testing.T) *httptest.Server {
 	issueReply := func(key, fields, rendered string) {
 		reply("/jira/rest/api/2/issue/"+key, func(r *http.Request) string {
 			// `issue` asks for everything; epic lookups name a few fields.
-			if f := r.URL.Query().Get("fields"); f != "*all" && !strings.HasPrefix(f, "summary,status,issuetype") {
+			if f := r.URL.Query().Get("fields"); f != "*all" && f != "attachment" && !strings.HasPrefix(f, "summary,status,issuetype") {
 				t.Errorf("%s fetched with fields=%q", key, f)
 			}
 			body := `{"key":"` + key + `","fields":` + fields
@@ -101,6 +101,10 @@ func fakeServer(t *testing.T) *httptest.Server {
 			{"type":{"name":"Blocks","inward":"is blocked by","outward":"blocks"},"inwardIssue":{"key":"PROJ-8","fields":{"summary":"Done dep","status":{"name":"Closed","statusCategory":{"key":"done"}}}}}
 		],
 		"subtasks":[{"key":"PROJ-124","fields":{"summary":"Tests","status":{"name":"To Do","statusCategory":{"key":"new"}}}}],
+		"attachment":[
+			{"id":"10010","filename":"server.log","size":21,"mimeType":"text/plain","author":{"displayName":"Ann"},"created":"2026-10-01T09:31:00.000+0000","content":"BASE/jira/secure/attachment/10010/server.log"},
+			{"id":"10011","filename":"../../.bashrc","size":2048,"mimeType":"text/plain","content":"BASE/jira/secure/attachment/10011/x"}
+		],
 		"comment":{"comments":[{"id":"501","author":{"displayName":"Cy"},"created":"2026-10-03T08:00:00.000+0000","body":"Also BASE/wiki/x/KgAAAA."}]}
 	}`, `{
 		"description":"<p>See <a href=\"BASE/wiki/display/DEV/Login+Flow\">Login Flow</a>.</p><h3>Steps</h3><ul><li>open page</li></ul>",
@@ -164,6 +168,56 @@ func fakeServer(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/wiki/x/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/wiki/pages/viewpage.action?pageId=42", http.StatusFound)
 	})
+	file := func(path, ctype, body string) {
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			if authorized(w, r) {
+				w.Header().Set("Content-Type", ctype)
+				fmt.Fprint(w, body)
+			}
+		})
+	}
+	redirect := func(path, to string) {
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			if authorized(w, r) {
+				http.Redirect(w, r, strings.ReplaceAll(to, "BASE", srv.URL), http.StatusFound)
+			}
+		})
+	}
+	attMeta := func(id, name string, size int, content string) {
+		jsonReply("/jira/rest/api/2/attachment/"+id, fmt.Sprintf(`{"id":%q,"filename":%q,"size":%d,"mimeType":"text/plain","content":%q}`, id, name, size, content))
+	}
+	file("/jira/secure/attachment/10010/server.log", "text/plain", "java.lang.NullPointer")
+	file("/jira/secure/attachment/10011/x", "text/plain", "alias ls=rm")
+	attMeta("10010", "server.log", 21, "BASE/jira/secure/attachment/10010/server.log")
+	attMeta("10012", "huge.bin", 999999999, "BASE/jira/secure/attachment/10012/huge.bin")
+	attMeta("10013", "elsewhere.txt", 3, "https://files.example.com/10013")
+	attMeta("10014", "moved.txt", 5, "BASE/jira/secure/attachment/10014/")
+	redirect("/jira/secure/attachment/10014/", "BASE/jira/secure/attachment/10014/real.txt")
+	file("/jira/secure/attachment/10014/real.txt", "text/plain", "moved")
+	attMeta("10015", "away.txt", 3, "BASE/jira/secure/attachment/10015")
+	redirect("/jira/secure/attachment/10015", "http://other.invalid/x")
+	attMeta("10016", "liar.txt", 3, "BASE/jira/secure/attachment/10016")
+	mux.HandleFunc("/jira/secure/attachment/10016", func(w http.ResponseWriter, r *http.Request) {
+		// Flushing first makes the response chunked, so only the streaming cap can catch it.
+		w.(http.Flusher).Flush()
+		fmt.Fprint(w, strings.Repeat("x", 4096))
+	})
+	attMeta("10017", "gated.txt", 3, "BASE/jira/secure/attachment/10017")
+	redirect("/jira/secure/attachment/10017", "/login.jsp?os_destination=x")
+	attMeta("10018", "gone.txt", 3, "BASE/jira/secure/attachment/10018")
+	attMeta("10019", "nolink.txt", 3, "")
+	attMeta("10020", "denied.txt", 3, "BASE/jira/secure/attachment/10020")
+	mux.HandleFunc("/jira/secure/attachment/10020", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusForbidden) })
+	attMeta("10021", "broken.txt", 3, "BASE/jira/secure/attachment/10021")
+	mux.HandleFunc("/jira/secure/attachment/10021", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusBadGateway) })
+	attMeta("10022", "relative.txt", 3, "secure/attachment/10022")
+
+	diagram := `{"id":"att900","title":"diagram.png","extensions":{"mediaType":"image/png","fileSize":4},
+		"version":{"when":"2026-09-30T12:00:00.000Z","by":{"displayName":"Ann"}},
+		"_links":{"download":"/download/attachments/42/diagram.png?version=1&api=v2"}}`
+	jsonReply("/wiki/rest/api/content/42/child/attachment", `{"results":[`+diagram+`],"size":1}`)
+	jsonReply("/wiki/rest/api/content/att900", diagram)
+	file("/wiki/download/attachments/42/diagram.png", "image/png", "\x89PNG")
 	mux.HandleFunc("/", http.NotFound)
 
 	srv = httptest.NewServer(mux)
@@ -744,4 +798,190 @@ func TestBadRequestMessage(t *testing.T) {
 			t.Errorf("%s: got %q, want %q", body, got, want)
 		}
 	}
+}
+
+func TestIssueListsAttachments(t *testing.T) {
+	setup(t)
+	out, errs, code := runAtl(t, "issue", "PROJ-123")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	mustContain(t, out,
+		"## Attachments (2)\n\n- server.log — 21 B · text/plain · Ann · 2026-10-01 09:31 · id 10010\n- ../../.bashrc — 2.0 KB · text/plain · id 10011\n",
+		"(download: atl attachment PROJ-123 for all, or atl attachment <id>)",
+	)
+	out, _, _ = runAtl(t, "issue", "PROJ-5")
+	if strings.Contains(out, "## Attachments") {
+		t.Errorf("an issue without attachments should have no section:\n%s", out)
+	}
+}
+
+func TestPageListsAttachments(t *testing.T) {
+	setup(t)
+	out, errs, code := runAtl(t, "page", "42")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	mustContain(t, out, "## Attachments (1)\n\n- diagram.png — 4 B · image/png · Ann · 2026-09-30 12:00 · id att900\n", "(download: atl attachment <id>)")
+}
+
+func TestAttachmentDownloadIssue(t *testing.T) {
+	setup(t)
+	dir := filepath.Join(t.TempDir(), "out")
+	out, errs, code := runAtl(t, "attachment", "proj-123", "--dir", dir)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	log, hidden := filepath.Join(dir, "server.log"), filepath.Join(dir, "_.._.bashrc")
+	mustContain(t, out, "Saved 2 of 2 to "+dir+":\n", "- "+log+" (21 B, text/plain)\n", "- "+hidden+" (11 B, text/plain)\n")
+	for path, want := range map[string]string{log: "java.lang.NullPointer", hidden: "alias ls=rm"} {
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != want {
+			t.Errorf("%s = %q, %v", path, got, err)
+		}
+		if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+			t.Errorf("%s mode %v, want 0600", path, info.Mode().Perm())
+		}
+	}
+
+	// A second download keeps the first copy and writes beside it.
+	out, _, code = runAtl(t, "attachment", "10010", "--dir", dir)
+	mustContain(t, out, "- "+filepath.Join(dir, "server-1.log")+" (21 B, text/plain)")
+	if code != 0 {
+		t.Errorf("second download exit %d", code)
+	}
+	if got, _ := os.ReadFile(log); string(got) != "java.lang.NullPointer" {
+		t.Errorf("first copy overwritten: %q", got)
+	}
+}
+
+func TestAttachmentDefaultDirAndJSON(t *testing.T) {
+	setup(t)
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	out, errs, code := runAtl(t, "attachment", "10010", "att900", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	var saved []savedFile
+	if err := json.Unmarshal([]byte(out), &saved); err != nil || len(saved) != 2 {
+		t.Fatalf("json %v: %s", err, out)
+	}
+	for _, s := range saved {
+		if !strings.HasPrefix(s.Path, filepath.Join(tmp, "atl-attachments-10010-")) {
+			t.Errorf("%s saved outside a fresh temp dir", s.Path)
+		}
+	}
+	if saved[1].Source != "confluence" || saved[1].Filename != "diagram.png" || saved[1].Bytes != 4 || saved[1].MimeType != "image/png" {
+		t.Errorf("confluence attachment: %+v", saved[1])
+	}
+	if got, _ := os.ReadFile(saved[1].Path); string(got) != "\x89PNG" {
+		t.Errorf("diagram content %q", got)
+	}
+}
+
+func TestAttachmentFromBranch(t *testing.T) {
+	setup(t)
+	gitRepo(t, "feature/PROJ-123-attachments")
+	out, errs, code := runAtl(t, "attachment", "--dir", t.TempDir())
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	mustContain(t, errs, "PROJ-123 from branch")
+	mustContain(t, out, "Saved 2 of 2")
+}
+
+func TestAttachmentSameHostRedirect(t *testing.T) {
+	setup(t)
+	dir := t.TempDir()
+	out, errs, code := runAtl(t, "attachment", "10014", "--dir", dir)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "moved.txt")); string(got) != "moved" {
+		t.Errorf("redirected download %q:\n%s", got, out)
+	}
+}
+
+func TestAttachmentRefusals(t *testing.T) {
+	setup(t)
+	for _, tc := range []struct {
+		args []string
+		code int
+		msg  string
+	}{
+		{[]string{"10012"}, exitAPI, "over the 50.0 MB limit; raise --max-bytes"},
+		{[]string{"10013"}, exitAPI, "refusing to send the token to https://files.example.com"},
+		{[]string{"10015"}, exitAPI, "refusing redirect to another host, other.invalid"},
+		{[]string{"10016", "--max-bytes", "100"}, exitAPI, "over the 100-byte limit"},
+		{[]string{"10010", "--max-bytes", "10"}, exitAPI, "over the 10 B limit"},
+		{[]string{"10017"}, exitAPI, "redirected to the login page"},
+		{[]string{"10018"}, exitAPI, "not found: /jira/secure/attachment/10018"},
+		{[]string{"10019"}, exitAPI, "nolink.txt has no download link"},
+		{[]string{"10020"}, exitAPI, "HTTP 403 downloading /jira/secure/attachment/10020; check the token"},
+		{[]string{"10021"}, exitAPI, "HTTP 502 downloading"},
+		{[]string{"10022"}, exitAPI, `bad download link "secure/attachment/10022"`},
+		{[]string{"99999"}, exitNotFound, "not found: /rest/api/2/attachment/99999"},
+		{[]string{"PROJ-123", "10010"}, exitUsage, "neither an issue key"},
+		{[]string{"10010", "--max-bytes", "0"}, exitUsage, "--max-bytes must be positive"},
+	} {
+		dir := t.TempDir()
+		_, errs, code := runAtl(t, append([]string{"attachment", "--dir", dir}, tc.args...)...)
+		if code != tc.code || !strings.Contains(errs, tc.msg) {
+			t.Errorf("%v: exit %d, want %d with %q:\n%s", tc.args, code, tc.code, tc.msg, errs)
+		}
+		// A refused or failed download must not leave a partial file behind.
+		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+			t.Errorf("%v left %d files in %s", tc.args, len(entries), dir)
+		}
+	}
+
+	out, _, code := runAtl(t, "attachment", "PROJ-5", "--dir", t.TempDir())
+	if code != 0 || out != "PROJ-5 has no attachments\n" {
+		t.Errorf("no attachments: exit %d, %q", code, out)
+	}
+	// One failure among several downloads still saves the rest and exits non-zero.
+	out, errs, code := runAtl(t, "attachment", "10010", "10013", "--dir", t.TempDir())
+	if code != exitAPI || !strings.Contains(out, "Saved 1 of 2") || !strings.Contains(errs, "1 of 2 downloads failed: 10013") {
+		t.Errorf("partial failure: exit %d\n%s\n%s", code, out, errs)
+	}
+	if _, errs, code := runAtl(t, "attachment", "10010", "--dir", "/proc/nope/x"); code != exitUsage || !strings.Contains(errs, "--dir") {
+		t.Errorf("bad --dir: exit %d, %s", code, errs)
+	}
+}
+
+func TestSafeFilename(t *testing.T) {
+	long := strings.Repeat("я", 150) + ".txt"
+	for in, want := range map[string]string{
+		"report.pdf":       "report.pdf",
+		"../../etc/passwd": "_.._etc_passwd",
+		"..":               "fallback",
+		".hidden":          "hidden",
+		"  . spaced .txt ": "spaced .txt",
+		"a\\b\x00c\nd.log": "a_bcd.log",
+		"":                 "fallback",
+		long:               strings.Repeat("я", 98) + ".txt",
+	} {
+		if got := safeFilename(in, "fallback"); got != want {
+			t.Errorf("safeFilename(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestHumanSize(t *testing.T) {
+	for n, want := range map[int64]string{0: "0 B", 1023: "1023 B", 1536: "1.5 KB", 5 << 20: "5.0 MB", 3 << 30: "3.0 GB"} {
+		if got := humanSize(n); got != want {
+			t.Errorf("humanSize(%d) = %s, want %s", n, got, want)
+		}
+	}
+}
+
+// gitRepo makes the test's working directory a fresh repository on branch.
+func gitRepo(t *testing.T, branch string) {
+	t.Helper()
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "-C", dir, "init", "-q", "-b", branch).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	t.Chdir(dir)
 }
