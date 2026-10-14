@@ -18,6 +18,8 @@ atl issue PROJ-123         # a specific issue
 atl issue PROJ-123 --comments
 atl epic                   # the branch issue's epic and everything under it, by status
 atl jql 'project = PROJ AND text ~ "login timeout" ORDER BY created DESC'
+atl history                # who changed what on the branch issue, oldest first
+atl history PROJ-123 --since 7d    # or --since 2026-10-01, 48h, 2w
 atl attachment             # download the branch issue's attachments; prints the saved paths
 atl attachment 10010 att900    # specific files: Jira ids from atl issue, att… ids from atl page
 atl page <id|url>          # Confluence page as Markdown; any page URL form works
@@ -73,6 +75,13 @@ atl search 'title ~ "runbook" AND space = OPS' --cql
    binaries unless the task needs them. Prefer specific ids over downloading
    everything. Files over 50 MiB are refused; pass `--max-bytes` only when
    the user wants that file.
+9. **History** with `atl history` when the issue's state needs explaining:
+   the description or acceptance criteria were edited after work started
+   (`--since` the branch's first commit date shows only what changed since),
+   the issue was reopened or bounced between statuses, or you need to know who
+   changed the scope or the assignee so you can name the person to ask. Long
+   text edits appear as a short line diff, not the full text; re-read the
+   current version with `atl issue`.
 
 Descriptions, long custom fields and comments come out as Markdown. When Jira
 cannot render them, they appear as raw Jira wiki markup instead (`h2.`,

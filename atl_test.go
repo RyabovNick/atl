@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 const token = "test-token"
@@ -41,16 +42,25 @@ func fakeServer(t *testing.T) *httptest.Server {
 	jsonReply := func(path, body string) {
 		reply(path, func(*http.Request) string { return body })
 	}
+	// changelogs feeds expand=changelog, which `history` requests with only summary and status.
+	changelogs := map[string]string{}
 	// issueReply serves renderedFields only when asked for, as Jira does.
 	issueReply := func(key, fields, rendered string) {
 		reply("/jira/rest/api/2/issue/"+key, func(r *http.Request) string {
 			// `issue` asks for everything; epic lookups name a few fields.
-			if f := r.URL.Query().Get("fields"); f != "*all" && f != "attachment" && !strings.HasPrefix(f, "summary,status,issuetype") {
+			f, expand := r.URL.Query().Get("fields"), r.URL.Query().Get("expand")
+			if f != "*all" && f != "attachment" && !strings.HasPrefix(f, "summary,status") {
 				t.Errorf("%s fetched with fields=%q", key, f)
 			}
+			if f == "*all" && strings.Contains(expand, "changelog") {
+				t.Errorf("%s: issue should not download the changelog", key)
+			}
 			body := `{"key":"` + key + `","fields":` + fields
-			if rendered != "" && r.URL.Query().Get("expand") == "renderedFields" {
+			if rendered != "" && expand == "renderedFields" {
 				body += `,"renderedFields":` + rendered
+			}
+			if cl, ok := changelogs[key]; ok && expand == "changelog" {
+				body += `,"changelog":` + cl
 			}
 			return body + "}"
 		})
@@ -58,6 +68,9 @@ func fakeServer(t *testing.T) *httptest.Server {
 
 	jsonReply("/jira/rest/api/2/field", `[
 		{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}},
+		{"id":"status","name":"Status","custom":false,"schema":{"type":"status"}},
+		{"id":"assignee","name":"Assignee","custom":false,"schema":{"type":"user"}},
+		{"id":"description","name":"Description","custom":false,"schema":{"type":"string"}},
 		{"id":"customfield_10008","name":"Epic Link","custom":true,"schema":{"type":"any","custom":"com.pyxis.greenhopper.jira:gh-epic-link"}},
 		{"id":"customfield_10010","name":"Story Points","custom":true,"schema":{"type":"number"}},
 		{"id":"customfield_10011","name":"Acceptance Criteria","custom":true,"schema":{"type":"string","custom":"com.atlassian.jira.plugin.system.customfieldtypes:textarea"}},
@@ -153,6 +166,31 @@ func fakeServer(t *testing.T) *httptest.Server {
 		}
 	})
 	issueReply("PROJ-5", `{"summary":"Plain","description":"h2. Raw wiki","comment":{"comments":[{"id":"9","body":"*raw* comment"}]}}`, "")
+	numbered := func(n int, suffix string) string {
+		lines := make([]string, n)
+		for i := range lines {
+			lines[i] = fmt.Sprintf("item %d%s", i+1, suffix)
+		}
+		return strings.Join(lines, `\n`)
+	}
+	changelogs["PROJ-123"] = `{"startAt":0,"maxResults":5,"total":7,"histories":[
+		{"author":{"displayName":"Ann"},"created":"2026-10-02T10:00:00.000+0000","items":[
+			{"field":"status","fieldtype":"jira","fromString":"To Do","toString":"In Progress"},
+			{"field":"assignee","fieldtype":"jira","fromString":null,"toString":"Ann"},
+			{"field":"Team Notes","fieldtype":"custom","fromString":"a","toString":"b"},
+			{"field":"Rank","fieldtype":"custom","fieldId":"customfield_10013","fromString":"","toString":"Ranked higher"}]},
+		{"author":{"displayName":"Bob"},"created":"2026-09-20T08:00:00.000+0000","items":[
+			{"field":"description","fieldtype":"jira","fromString":null,"toString":"Line one\nLine two"},
+			{"field":"Story Points","fieldtype":"custom","fromString":"3","toString":"5"}]},
+		{"author":{"displayName":"Cy"},"created":"2026-10-01T12:00:00.000+0000","items":[
+			{"field":"description","fieldtype":"jira","fromString":"Line one\nLine two","toString":"Line one\nLine 2\nLine three"},
+			{"field":"Acceptance Criteria","fieldtype":"custom","fromString":"` + numbered(30, "") + `","toString":"` + numbered(30, " v2") + `"},
+			{"field":"environment","fieldtype":"jira","fromString":"` + numbered(250, "") + `","toString":""}]},
+		{"author":{"displayName":"Dee"},"created":"2026-10-01T13:00:00.000+0000","items":[
+			{"field":"Rank","fieldtype":"custom","fromString":"","toString":"Ranked lower"}]},
+		{"created":"not a date","items":[{"field":"labels","fieldtype":"jira","fromString":"","toString":"auth"}]}
+	]}`
+	changelogs["PROJ-5"] = `{"startAt":0,"maxResults":0,"total":0,"histories":[]}`
 	jsonReply("/jira/rest/api/2/issue/PROJ-123/remotelink", `[
 		{"object":{"url":"BASE/wiki/pages/viewpage.action?pageId=42","title":"Login spec"},"application":{"type":"com.atlassian.confluence"}},
 		{"object":{"url":"https://github.com/x/y/pull/1","title":"PR 1"},"application":{}}
@@ -984,4 +1022,123 @@ func gitRepo(t *testing.T, branch string) {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
 	t.Chdir(dir)
+}
+
+func fixedNow(t *testing.T, at string) {
+	t.Helper()
+	ref, err := time.Parse(time.RFC3339, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := now
+	now = func() time.Time { return ref }
+	t.Cleanup(func() { now = old })
+}
+
+func TestHistory(t *testing.T) {
+	srv := setup(t)
+	out, errs, code := runAtl(t, "history", "proj-123")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	mustContain(t, out,
+		"# PROJ-123: Fix login — history",
+		"Status: In Progress · 4 changes\n",
+		"(partial: Jira returned 5 of 7 changes)",
+		"URL: "+srv.URL+"/jira/browse/PROJ-123",
+		"### 2026-10-02 10:00 Ann\n\n- Status: To Do → In Progress\n- Assignee: (none) → Ann\n- Team Notes: a → b\n",
+		"### 2026-09-20 08:00 Bob\n\n- Description set (17 chars)\n    + Line one\n    + Line two\n- Story Points: 3 → 5\n",
+		"- Description changed (17 → 26 chars)\n    - Line two\n    + Line 2\n    + Line three\n",
+		"- Acceptance Criteria changed (",
+		"    … 40 more changed lines",
+		"- Environment cleared (was ",
+		"### not a date ?\n\n- Labels: (none) → auth",
+	)
+	// The 250-line environment is too big to diff and gets only its size.
+	if strings.Contains(out, "- item 250") {
+		t.Errorf("oversized text should not be diffed:\n%s", out)
+	}
+	if strings.Contains(out, "Rank") || strings.Contains(out, "Dee") {
+		t.Errorf("rank-only changes should be dropped:\n%s", out)
+	}
+	if strings.Index(out, "Bob") > strings.Index(out, "Cy") || strings.Index(out, "Cy") > strings.Index(out, "Ann") {
+		t.Errorf("history should be oldest first:\n%s", out)
+	}
+}
+
+func TestHistorySince(t *testing.T) {
+	setup(t)
+	fixedNow(t, "2026-10-03T00:00:00Z")
+	for _, since := range []string{"2026-10-01", "48h", "2d"} {
+		out, errs, code := runAtl(t, "history", "PROJ-123", "--since", since)
+		if code != 0 {
+			t.Fatalf("%s: exit %d: %s", since, code, errs)
+		}
+		mustContain(t, out, "Ann", "Cy", "not a date")
+		if strings.Contains(out, "Bob") {
+			t.Errorf("--since %s kept an older change:\n%s", since, out)
+		}
+	}
+	out, _, _ := runAtl(t, "history", "PROJ-123", "--since", "1w")
+	mustContain(t, out, "since 2026-09-26 ", "3 changes")
+
+	out, _, code := runAtl(t, "history", "PROJ-5", "--since", "0d")
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	mustContain(t, out, "· 0 changes since ", "(no changes since ")
+	if strings.Contains(out, "partial") {
+		t.Errorf("complete history marked partial:\n%s", out)
+	}
+
+	if _, errs, code := runAtl(t, "history", "PROJ-123", "--since", "yesterday"); code != exitUsage || !strings.Contains(errs, "--since") {
+		t.Errorf("bad --since: exit %d, %s", code, errs)
+	}
+}
+
+func TestHistoryJSONAndErrors(t *testing.T) {
+	setup(t)
+	out, errs, code := runAtl(t, "history", "PROJ-123", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	var v struct {
+		Changelog struct {
+			Total int `json:"total"`
+		} `json:"changelog"`
+	}
+	if err := json.Unmarshal([]byte(out), &v); err != nil || v.Changelog.Total != 7 {
+		t.Errorf("history --json: %v, %+v", err, v)
+	}
+	if _, _, code := runAtl(t, "history", "PROJ-999"); code != exitNotFound {
+		t.Errorf("missing issue: exit %d", code)
+	}
+	if _, _, code := runAtl(t, "history", "A-1", "B-2"); code != exitUsage {
+		t.Errorf("two keys: exit %d", code)
+	}
+	clearEnv(t)
+	t.Setenv("ATL_CONFIG", filepath.Join(t.TempDir(), "absent.ini"))
+	if _, _, code := runAtl(t, "history", "PROJ-123"); code != exitConfig {
+		t.Errorf("no config: exit %d", code)
+	}
+}
+
+func TestLineDiff(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want []string
+	}{
+		{"a\nb\nc", "a\nb\nc", nil},
+		{"", "x", []string{"+ x"}},
+		{"x", "", []string{"- x"}},
+		{"a\nb\nc", "a\nc\nd", []string{"- b", "+ d"}},
+	} {
+		if got := lineDiff(splitLines(tc.a), splitLines(tc.b)); strings.Join(got, "|") != strings.Join(tc.want, "|") {
+			t.Errorf("lineDiff(%q, %q) = %q, want %q", tc.a, tc.b, got, tc.want)
+		}
+	}
+	long := strings.Repeat("x", historyLineChars+10)
+	if got := longChange("Summary", "", long); !strings.HasSuffix(got[1], "…") {
+		t.Errorf("long diff lines should be clipped: %q", got)
+	}
 }

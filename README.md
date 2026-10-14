@@ -16,6 +16,7 @@ atl issue PROJ-123    # first real check
 | `atl issue [KEY]` | fields, custom fields by name, open blockers, linked issues (one level), subtasks, attachments, Confluence and other links; KEY defaults to the current branch's |
 | `atl jql <query>` | issues matching JQL with status, assignee and update time; says how many more exist |
 | `atl epic [KEY]` | an epic and the issues under it, grouped by status category; a non-epic KEY resolves to its epic or parent |
+| `atl history [KEY]` | who changed which field and when, oldest first; `--since 2026-10-01` or `--since 7d` narrows it |
 | `atl attachment [KEY \| ID...]` | downloads all of an issue's attachments, or the given Jira ids / Confluence `att<digits>` ids, and prints the saved paths |
 | `atl page <id\|url>` | a page as Markdown, with its attachments; accepts `pageId=`, `/pages/<id>`, `/display/SPACE/Title` and `/x/<tiny>` URLs |
 | `atl search <text>` | pages and blog posts matching `text ~`, or raw CQL with `--cql` |
@@ -28,6 +29,12 @@ development summary, bare ids) are left out.
 `atl epic` finds children with `"Epic Link" = KEY OR parent = KEY` when the
 instance has the Epic Link field, and `parent = KEY` otherwise. A query Jira or
 Confluence rejects exits 2 with the server's error messages.
+
+`atl history` reads the issue's changelog. Long text edits (description,
+long custom fields) show their size change and a line diff capped at 20
+lines, instead of both versions; rank changes are left out. When Jira returns
+fewer changes than the changelog's total, the output says the history is
+partial. `atl issue` does not fetch the changelog, so it stays small.
 
 `atl attachment` saves into `--dir` or a new `atl-attachments-*` directory
 under the system temp dir, as mode 0600 files that never overwrite an existing
