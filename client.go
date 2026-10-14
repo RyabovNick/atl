@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -231,6 +232,11 @@ func (c *client) get(path string, params url.Values, out any) ([]byte, error) {
 		return nil, fail(exitNotFound, "%s: not found: %s", c.name, path)
 	case code >= 300 && code < 400:
 		return nil, fail(exitAPI, "%s: %s redirected to %s; the token was probably not accepted", c.name, path, resp.Header.Get("Location"))
+	case code == 400:
+		if msg := badRequestMessage(body); msg != "" {
+			return nil, fail(exitUsage, "%s: rejected the request: %s", c.name, msg)
+		}
+		return nil, fail(exitUsage, "%s: HTTP 400 on %s: %s", c.name, path, truncate(string(body), 300))
 	case code >= 400:
 		return nil, fail(exitAPI, "%s: HTTP %d on %s: %s", c.name, code, path, truncate(string(body), 300))
 	}
@@ -243,6 +249,32 @@ func (c *client) get(path string, params url.Values, out any) ([]byte, error) {
 		}
 	}
 	return body, nil
+}
+
+// badRequestMessage extracts the reason from a 400 body: Jira sends errorMessages
+// and per-field errors, Confluence a single message. Bad JQL and CQL land here.
+func badRequestMessage(body []byte) string {
+	var e struct {
+		ErrorMessages []string          `json:"errorMessages"`
+		Errors        map[string]string `json:"errors"`
+		Message       string            `json:"message"`
+	}
+	if json.Unmarshal(body, &e) != nil {
+		return ""
+	}
+	msgs := e.ErrorMessages
+	keys := make([]string, 0, len(e.Errors))
+	for k := range e.Errors {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		msgs = append(msgs, k+": "+e.Errors[k])
+	}
+	if e.Message != "" {
+		msgs = append(msgs, e.Message)
+	}
+	return strings.Join(msgs, "; ")
 }
 
 func writeJSON(w io.Writer, raw []byte) error {

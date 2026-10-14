@@ -13,13 +13,15 @@ import (
 const usage = `atl: read-only Jira and Confluence lookups
 
   atl issue [KEY] [--comments] [--json]       issue, custom fields, links, Confluence refs
+  atl jql <query> [--limit N] [--json]        Jira issues matching JQL
+  atl epic [KEY] [--limit N] [--json]         issues under an epic, by status
   atl page <id|url> [--max-chars N] [--json]  Confluence page as Markdown
   atl search <text> [--space KEY] [--cql] [--limit N] [--json]
 
 KEY defaults to the issue key in the current git branch.
 Credentials: JIRA_URL, JIRA_API_TOKEN, CONFLUENCE_URL, CONFLUENCE_API_TOKEN
 (plus *_USERNAME for basic auth), over $ATL_CONFIG or ~/.config/atl/config.ini.
-Exit codes: 0 ok, 1 API or network, 2 usage, 3 config, 4 not found.
+Exit codes: 0 ok, 1 API or network, 2 usage or rejected query, 3 config, 4 not found.
 `
 
 func newFlags(name, args, help string, stderr io.Writer) *flag.FlagSet {
@@ -58,6 +60,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	commands := map[string]func([]string, io.Writer, io.Writer) error{
 		"issue":  cmdIssue,
+		"jql":    cmdJQL,
+		"epic":   cmdEpic,
 		"page":   cmdPage,
 		"search": cmdSearch,
 	}

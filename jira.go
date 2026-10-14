@@ -37,6 +37,8 @@ type issueRef struct {
 		Summary   string  `json:"summary"`
 		Status    *status `json:"status"`
 		IssueType *named  `json:"issuetype"`
+		Assignee  *named  `json:"assignee"`
+		Updated   string  `json:"updated"`
 	} `json:"fields"`
 }
 
@@ -131,6 +133,18 @@ func keyFromBranch(stderr io.Writer) (string, error) {
 	return key, nil
 }
 
+// keyArg takes an explicit issue key or falls back to the current branch's.
+func keyArg(pos []string, cmd string, stderr io.Writer) (string, error) {
+	switch len(pos) {
+	case 0:
+		return keyFromBranch(stderr)
+	case 1:
+		return strings.ToUpper(pos[0]), nil
+	default:
+		return "", fail(exitUsage, "%s takes at most one key", cmd)
+	}
+}
+
 func (l issueLink) relation() (string, *issueRef) {
 	if l.OutwardIssue != nil {
 		return l.Type.Outward, l.OutwardIssue
@@ -194,16 +208,9 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var key string
-	switch len(pos) {
-	case 0:
-		if key, err = keyFromBranch(stderr); err != nil {
-			return err
-		}
-	case 1:
-		key = strings.ToUpper(pos[0])
-	default:
-		return fail(exitUsage, "issue takes at most one key")
+	key, err := keyArg(pos, "issue", stderr)
+	if err != nil {
+		return err
 	}
 
 	jira, err := newClient("jira")
@@ -278,6 +285,11 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 	if epicField != "" {
 		var epic string
 		if json.Unmarshal(extra.Fields[epicField], &epic) == nil && epic != "" {
+			var e issueRef
+			// The epic's summary is context, not essential: show the bare key if it cannot be read.
+			if _, err := jira.get("/rest/api/2/issue/"+url.PathEscape(epic), url.Values{"fields": {"summary,status,issuetype"}}, &e); err == nil {
+				epic = issueLine(&e)
+			}
 			line("Epic: %s", epic)
 		}
 	}

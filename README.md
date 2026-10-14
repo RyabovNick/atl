@@ -14,6 +14,8 @@ atl issue PROJ-123    # first real check
 | Command | Returns |
 | --- | --- |
 | `atl issue [KEY]` | fields, custom fields by name, open blockers, linked issues (one level), subtasks, Confluence and other links; KEY defaults to the current branch's |
+| `atl jql <query>` | issues matching JQL with status, assignee and update time; says how many more exist |
+| `atl epic [KEY]` | an epic and the issues under it, grouped by status category; a non-epic KEY resolves to its epic or parent |
 | `atl page <id\|url>` | a page as Markdown; accepts `pageId=`, `/pages/<id>`, `/display/SPACE/Title` and `/x/<tiny>` URLs |
 | `atl search <text>` | pages and blog posts matching `text ~`, or raw CQL with `--cql` |
 
@@ -21,6 +23,10 @@ atl issue PROJ-123    # first real check
 from Jira's rendered HTML into Markdown, falling back to raw wiki markup when
 Jira returns none. Custom fields with no readable value (rank, epic colour,
 development summary, bare ids) are left out.
+
+`atl epic` finds children with `"Epic Link" = KEY OR parent = KEY` when the
+instance has the Epic Link field, and `parent = KEY` otherwise. A query Jira or
+Confluence rejects exits 2 with the server's error messages.
 
 Environment variables override the config file, which is optional when they
 supply the URL and token. Tokens are sent as `Authorization: Bearer`; a

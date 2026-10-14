@@ -22,15 +22,20 @@ func fakeServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	var srv *httptest.Server
 	mux := http.NewServeMux()
+	authorized := func(w http.ResponseWriter, r *http.Request) bool {
+		user, pass, basic := r.BasicAuth()
+		if r.Header.Get("Authorization") != "Bearer "+token && !(basic && user == "me" && pass == token) {
+			http.Redirect(w, r, "/login.jsp", http.StatusFound)
+			return false
+		}
+		w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+		return true
+	}
 	reply := func(path string, body func(*http.Request) string) {
 		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-			user, pass, basic := r.BasicAuth()
-			if r.Header.Get("Authorization") != "Bearer "+token && !(basic && user == "me" && pass == token) {
-				http.Redirect(w, r, "/login.jsp", http.StatusFound)
-				return
+			if authorized(w, r) {
+				fmt.Fprint(w, strings.ReplaceAll(body(r), "BASE", srv.URL))
 			}
-			w.Header().Set("Content-Type", "application/json;charset=UTF-8")
-			fmt.Fprint(w, strings.ReplaceAll(body(r), "BASE", srv.URL))
 		})
 	}
 	jsonReply := func(path, body string) {
@@ -39,8 +44,9 @@ func fakeServer(t *testing.T) *httptest.Server {
 	// issueReply serves renderedFields only when asked for, as Jira does.
 	issueReply := func(key, fields, rendered string) {
 		reply("/jira/rest/api/2/issue/"+key, func(r *http.Request) string {
-			if r.URL.Query().Get("fields") != "*all" {
-				t.Errorf("%s fetched with fields=%q", key, r.URL.Query().Get("fields"))
+			// `issue` asks for everything; epic lookups name a few fields.
+			if f := r.URL.Query().Get("fields"); f != "*all" && !strings.HasPrefix(f, "summary,status,issuetype") {
+				t.Errorf("%s fetched with fields=%q", key, f)
 			}
 			body := `{"key":"` + key + `","fields":` + fields
 			if rendered != "" && r.URL.Query().Get("expand") == "renderedFields" {
@@ -102,6 +108,46 @@ func fakeServer(t *testing.T) *httptest.Server {
 		"customfield_10010":"5",
 		"comment":{"comments":[{"id":"501","body":"<p>Also <em>this</em>.</p>"}]}
 	}`)
+	issueReply("PROJ-1", `{"summary":"Login epic","status":{"name":"In Progress","statusCategory":{"key":"indeterminate"}},"issuetype":{"name":"Epic"}}`, "")
+	issueReply("PROJ-124", `{"summary":"Tests","issuetype":{"name":"Sub-task"},"parent":{"key":"PROJ-123","fields":{"summary":"Fix login"}}}`, "")
+	issueReply("PROJ-77", `{"summary":"Child","issuetype":{"name":"Story"},"parent":{"key":"PROJ-1"}}`, "")
+	issueReply("PROJ-78", `{"summary":"Orphan sub","issuetype":{"name":"Sub-task"},"parent":{"key":"PROJ-5"}}`, "")
+	mux.HandleFunc("/jira/rest/api/2/search", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(w, r) {
+			return
+		}
+		q := r.URL.Query()
+		if q.Get("fields") != "summary,status,issuetype,priority,assignee,updated" {
+			t.Errorf("search fields=%q", q.Get("fields"))
+		}
+		switch jql := q.Get("jql"); jql {
+		case `"Epic Link" = PROJ-1 OR parent = PROJ-1 ORDER BY key`:
+			if q.Get("maxResults") == "1" {
+				fmt.Fprint(w, `{"total":5,"issues":[{"key":"PROJ-7","fields":{"summary":"API","status":{"name":"Open","statusCategory":{"key":"new"}}}}]}`)
+				return
+			}
+			fmt.Fprint(w, `{"total":5,"issues":[
+				{"key":"PROJ-123","fields":{"summary":"Fix login","status":{"name":"In Progress","statusCategory":{"key":"indeterminate"}},"issuetype":{"name":"Story"},"assignee":{"displayName":"Ann"},"updated":"2026-10-02T10:00:00.000+0000"}},
+				{"key":"PROJ-7","fields":{"summary":"API","status":{"name":"Open","statusCategory":{"key":"new"}},"issuetype":{"name":"Bug"}}},
+				{"key":"PROJ-8","fields":{"summary":"Done dep","status":{"name":"Closed","statusCategory":{"key":"done"}}}},
+				{"key":"PROJ-10","fields":{"summary":"Odd","status":{"name":"Parked","statusCategory":{"key":"undefined"}}}},
+				{"key":"PROJ-11","fields":{"summary":"No status"}}
+			]}`)
+		case `"Epic Link" = PROJ-5 OR parent = PROJ-5 ORDER BY key`, "project = NONE":
+			fmt.Fprint(w, `{"total":0,"issues":[]}`)
+		case "project = PROJ ORDER BY updated DESC":
+			if q.Get("maxResults") != "2" {
+				t.Errorf("maxResults=%q", q.Get("maxResults"))
+			}
+			fmt.Fprint(w, `{"total":135,"issues":[
+				{"key":"PROJ-123","fields":{"summary":"Fix login","status":{"name":"In Progress","statusCategory":{"key":"indeterminate"}},"assignee":{"displayName":"Ann"},"updated":"2026-10-02T10:00:00.000+0000"}},
+				{"key":"PROJ-7","fields":{"summary":"API","status":{"name":"Open","statusCategory":{"key":"new"}}}}
+			]}`)
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"errorMessages":["Error in the JQL Query: Expecting ')' before the end of the query."],"errors":{"jql":"bad"}}`)
+		}
+	})
 	issueReply("PROJ-5", `{"summary":"Plain","description":"h2. Raw wiki","comment":{"comments":[{"id":"9","body":"*raw* comment"}]}}`, "")
 	jsonReply("/jira/rest/api/2/issue/PROJ-123/remotelink", `[
 		{"object":{"url":"BASE/wiki/pages/viewpage.action?pageId=42","title":"Login spec"},"application":{"type":"com.atlassian.confluence"}},
@@ -513,6 +559,8 @@ func TestHTTPErrors(t *testing.T) {
 			fmt.Fprint(w, "<html>login</html>")
 		case "Bearer forbidden":
 			http.Error(w, "no", http.StatusForbidden)
+		case "Bearer badreq":
+			http.Error(w, "nope", http.StatusBadRequest)
 		case "Bearer broken":
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, "{not json")
@@ -533,8 +581,167 @@ func TestHTTPErrors(t *testing.T) {
 			t.Errorf("%s: exit %d, %s", tok, code, errs)
 		}
 	}
+	writeConfig(t, fmt.Sprintf("[jira]\nurl = %s/jira\ntoken = badreq\n", srv.URL), 0o600)
+	if _, errs, code := runAtl(t, "issue", "PROJ-1"); code != exitUsage || !strings.Contains(errs, "HTTP 400 on /rest/api/2/field: nope") {
+		t.Errorf("unparseable 400: exit %d, %s", code, errs)
+	}
 	writeConfig(t, "[jira]\nurl = http://127.0.0.1:1\ntoken = x\n", 0o600)
 	if _, _, code := runAtl(t, "issue", "PROJ-1"); code != exitAPI {
 		t.Errorf("unreachable: exit %d", code)
+	}
+}
+
+func TestIssueEpicLine(t *testing.T) {
+	setup(t)
+	out, errs, code := runAtl(t, "issue", "PROJ-123")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	mustContain(t, out, "Epic: PROJ-1 [In Progress] Login epic (Epic)\n")
+}
+
+func TestJQL(t *testing.T) {
+	setup(t)
+	out, errs, code := runAtl(t, "jql", "project", "=", "PROJ", "ORDER BY updated DESC", "--limit", "2")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	mustContain(t, out,
+		"- PROJ-123 [In Progress] Fix login · Ann · updated 2026-10-02 10:00\n",
+		"- PROJ-7 [Open] API\n",
+		"showing 2 of 135; raise --limit or narrow the query",
+	)
+
+	out, _, code = runAtl(t, "jql", "project = NONE")
+	if code != 0 || !strings.Contains(out, "no issues for: project = NONE") {
+		t.Errorf("empty result: exit %d, %s", code, out)
+	}
+
+	_, errs, code = runAtl(t, "jql", "project = (")
+	if code != exitUsage || !strings.Contains(errs, "jira: rejected the request: Error in the JQL Query: Expecting ')' before the end of the query.; jql: bad") {
+		t.Errorf("bad JQL: exit %d, %s", code, errs)
+	}
+
+	out, _, code = runAtl(t, "jql", "project = NONE", "--json")
+	if code != 0 || !strings.Contains(out, `"total": 0`) {
+		t.Errorf("--json: exit %d, %s", code, out)
+	}
+	if _, _, code := runAtl(t, "jql"); code != exitUsage {
+		t.Errorf("no query: exit %d", code)
+	}
+}
+
+func TestEpic(t *testing.T) {
+	srv := setup(t)
+	out, errs, code := runAtl(t, "epic", "PROJ-1")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	mustContain(t, out,
+		"# PROJ-1 [In Progress] Login epic (Epic)\n",
+		"5 issues: 2 other, 1 done, 1 in progress, 1 to do\n",
+		"URL: "+srv.URL+"/jira/browse/PROJ-1",
+		"## To do (1)\n\n- PROJ-7 [Open] API (Bug)\n",
+		"## In progress (1)\n\n- PROJ-123 [In Progress] Fix login (Story) · Ann · updated 2026-10-02 10:00\n",
+		"## Done (1)\n\n- PROJ-8 [Closed] Done dep\n",
+		"## Other (2)\n\n- PROJ-10 [Parked] Odd\n- PROJ-11 [?] No status\n",
+	)
+	if strings.Index(out, "## To do") > strings.Index(out, "## In progress") || strings.Index(out, "## In progress") > strings.Index(out, "## Done") {
+		t.Errorf("groups out of order:\n%s", out)
+	}
+	if strings.Contains(out, "counts cover") {
+		t.Errorf("complete result reported as truncated:\n%s", out)
+	}
+
+	out, _, _ = runAtl(t, "epic", "PROJ-1", "--limit", "5", "--json")
+	mustContain(t, out, `"epic": {`, `"children": {`, `"total": 5`)
+}
+
+func TestEpicResolution(t *testing.T) {
+	setup(t)
+	for key, note := range map[string]string{
+		"PROJ-123": "atl: PROJ-123 is a Story; showing its epic PROJ-1\n",
+		"PROJ-124": "atl: PROJ-124 is a Sub-task; showing its parent PROJ-123's epic PROJ-1\n",
+		"PROJ-77":  "atl: PROJ-77 is a Story; showing its parent PROJ-1\n",
+	} {
+		out, errs, code := runAtl(t, "epic", key)
+		if code != 0 {
+			t.Fatalf("%s: exit %d: %s", key, code, errs)
+		}
+		if !strings.Contains(errs, note) {
+			t.Errorf("%s: stderr %q, want %q", key, errs, note)
+		}
+		mustContain(t, out, "# PROJ-1 [In Progress] Login epic (Epic)")
+	}
+
+	out, errs, code := runAtl(t, "epic", "PROJ-5")
+	if code != 0 {
+		t.Fatalf("PROJ-5: exit %d: %s", code, errs)
+	}
+	mustContain(t, errs, "atl: PROJ-5 has no epic or parent; listing its own children")
+	mustContain(t, out, "# PROJ-5 [?] Plain\n", `no child issues for: "Epic Link" = PROJ-5 OR parent = PROJ-5 ORDER BY key`)
+
+	out, errs, _ = runAtl(t, "epic", "PROJ-78")
+	mustContain(t, errs, "atl: PROJ-78 is a Sub-task; showing its parent PROJ-5\n")
+	mustContain(t, out, "# PROJ-5 [?] Plain")
+
+	if _, _, code := runAtl(t, "epic", "PROJ-999"); code != exitNotFound {
+		t.Errorf("missing issue: exit %d", code)
+	}
+	if _, _, code := runAtl(t, "epic", "A-1", "B-2"); code != exitUsage {
+		t.Errorf("two keys: exit %d", code)
+	}
+}
+
+// An instance without the Epic Link field relates issues by parent only.
+func TestEpicWithoutEpicLinkField(t *testing.T) {
+	mux := http.NewServeMux()
+	var seenJQL string
+	mux.HandleFunc("/rest/api/2/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/rest/api/2/field":
+			fmt.Fprint(w, `[{"id":"summary","name":"Summary"}]`)
+		case "/rest/api/2/issue/EP-1":
+			fmt.Fprint(w, `{"key":"EP-1","fields":{"summary":"Epic","issuetype":{"name":"Epic"}}}`)
+		case "/rest/api/2/search":
+			seenJQL = r.URL.Query().Get("jql")
+			fmt.Fprint(w, `{"total":1,"issues":[{"key":"EP-2","fields":{"summary":"Child","status":{"name":"Done","statusCategory":{"key":"done"}}}}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	writeConfig(t, fmt.Sprintf("[jira]\nurl = %s\ntoken = x\n", srv.URL), 0o600)
+	out, errs, code := runAtl(t, "epic", "ep-1")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	if seenJQL != "parent = EP-1 ORDER BY key" {
+		t.Errorf("jql = %q", seenJQL)
+	}
+	mustContain(t, out, "1 issues: 1 done", "- EP-2 [Done] Child")
+}
+
+func TestEpicTruncated(t *testing.T) {
+	setup(t)
+	out, errs, code := runAtl(t, "epic", "PROJ-1", "--limit", "1")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	mustContain(t, out, "5 issues: 1 to do\n", "counts cover the first 1 of 5; raise --limit for all")
+}
+
+func TestBadRequestMessage(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"errorMessages":["a"],"errors":{"z":"2","b":"1"}}`: "a; b: 1; z: 2",
+		`{"statusCode":400,"message":"Could not parse cql"}`: "Could not parse cql",
+		`{}`:       "",
+		`not json`: "",
+	} {
+		if got := badRequestMessage([]byte(body)); got != want {
+			t.Errorf("%s: got %q, want %q", body, got, want)
+		}
 	}
 }
