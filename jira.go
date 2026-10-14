@@ -332,10 +332,10 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 	}
 
 	line("\n## Description\n")
-	line("%s", or(richText(extra.RenderedFields["description"], f.Description), "(empty)"))
+	line("%s", or(demoteHeadings(richText(extra.RenderedFields["description"], f.Description), 3), "(empty)"))
 	for _, fv := range longFields {
 		line("\n## %s\n", fv.name)
-		line("%s", fv.value)
+		line("%s", demoteHeadings(fv.value, 3))
 	}
 
 	if len(rels) > 0 {
@@ -400,7 +400,7 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 		line("\n## Comments (%d)", len(cs))
 		for _, c := range cs {
 			line("\n### %s — %s\n", or(nameOf(c.Author), "?"), shortDate(c.Created))
-			line("%s", richText(renderedBody[c.ID], c.Body))
+			line("%s", demoteHeadings(richText(renderedBody[c.ID], c.Body), 4))
 		}
 	case len(cs) > 0:
 		line("\n(%d comments; add --comments to read them)", len(cs))

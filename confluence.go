@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -130,16 +131,105 @@ func isDigits(s string) bool {
 	return err == nil
 }
 
+const childPageBatch = 50
+
+// maxChildPages bounds a --children walk; a var so tests can lower it.
+var maxChildPages = 500
+
+type childPage struct {
+	page
+	children []childPage
+}
+
+func (c childPage) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"id": c.ID, "title": c.Title, "updated": c.Version.When, "webui": c.Links.WebUI, "children": c.children,
+	})
+}
+
+// childPages lists a page's children depth levels down, at most *budget pages
+// in total; truncated reports that the budget ran out before the tree did.
+func childPages(conf *client, id string, depth int, budget *int) (kids []childPage, truncated bool, err error) {
+	for start := 0; ; {
+		if *budget <= 0 {
+			return kids, true, nil
+		}
+		limit := min(childPageBatch, *budget)
+		var res struct {
+			Results []page `json:"results"`
+			Links   struct {
+				Next string `json:"next"`
+			} `json:"_links"`
+		}
+		params := url.Values{"expand": {"version"}, "limit": {strconv.Itoa(limit)}, "start": {strconv.Itoa(start)}}
+		if _, err := conf.get("/rest/api/content/"+id+"/child/page", params, &res); err != nil {
+			return nil, false, err
+		}
+		for _, r := range res.Results {
+			kids = append(kids, childPage{page: r})
+		}
+		*budget -= len(res.Results)
+		start += len(res.Results)
+		if len(res.Results) == 0 || (res.Links.Next == "" && len(res.Results) < limit) {
+			break
+		}
+	}
+	if depth > 1 {
+		for i := range kids {
+			sub, cut, err := childPages(conf, kids[i].ID, depth-1, budget)
+			if err != nil {
+				return nil, false, err
+			}
+			kids[i].children = sub
+			if cut {
+				return kids, true, nil
+			}
+		}
+	}
+	return kids, false, nil
+}
+
+func countPages(ps []childPage) int {
+	n := len(ps)
+	for _, p := range ps {
+		n += countPages(p.children)
+	}
+	return n
+}
+
+func writeChildren(b *strings.Builder, base string, ps []childPage, indent string) {
+	for _, p := range ps {
+		fmt.Fprintf(b, "%s- %s — id %s · updated %s\n%s  %s%s\n", indent, p.Title, p.ID, shortDate(p.Version.When), indent, base, p.Links.WebUI)
+		writeChildren(b, base, p.children, indent+"  ")
+	}
+}
+
 func cmdPage(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("page", "<id|url>", "A Confluence page as Markdown. Accepts a page id or any page URL:\nviewpage.action?pageId=, /pages/<id>, /display/SPACE/Title, /x/<tiny>.", stderr)
-	maxChars := fs.Int("max-chars", 40000, "truncate the body to this many characters (0 = no limit)")
-	asJSON := fs.Bool("json", false, "print the raw API response")
+	fs := newFlags("page", "<id|url>", `A Confluence page as Markdown. Accepts a page id or any page URL:
+viewpage.action?pageId=, /pages/<id>, /display/SPACE/Title, /x/<tiny>.
+
+--toc prints the headings with their sizes instead of the body, and --section
+prints only the matching sections. --children lists child pages instead of the
+body; add --toc or --section to get those as well.`, stderr)
+	maxChars := fs.Int("max-chars", 40000, "truncate the body or sections to this many characters (0 = no limit)")
+	toc := fs.Bool("toc", false, "print the outline of headings with section sizes, not the body")
+	var sections stringsFlag
+	fs.Var(&sections, "section", "print only the section with this heading (repeatable; exact, then prefix, then substring)")
+	children := fs.Bool("children", false, "list child pages instead of the body")
+	depth := fs.Int("depth", 1, "levels of child pages to list with --children (1-3)")
+	asJSON := fs.Bool("json", false, "print the raw API response (with --children, the page and its child tree)")
 	pos, err := parseFlags(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) != 1 {
 		return fail(exitUsage, "page takes exactly one id or URL")
+	}
+	if *depth < 1 || *depth > 3 {
+		return fail(exitUsage, "--depth must be 1, 2 or 3")
+	}
+	if *asJSON && (*toc || len(sections) > 0) {
+		return fail(exitUsage, "--json prints the raw page; it does not combine with --toc or --section")
 	}
 	conf, err := newClient("confluence")
 	if err != nil {
@@ -149,13 +239,36 @@ func cmdPage(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	needBody := !*children || *toc || len(sections) > 0
+	expand := "space,version,ancestors"
+	if needBody {
+		expand = "body.view," + expand
+	}
 	var p page
-	raw, err := conf.get("/rest/api/content/"+id, url.Values{"expand": {"body.view,space,version,ancestors"}}, &p)
+	raw, err := conf.get("/rest/api/content/"+id, url.Values{"expand": {expand}}, &p)
 	if err != nil {
 		return err
 	}
+	var kids []childPage
+	var truncatedKids bool
+	if *children {
+		budget := maxChildPages
+		if kids, truncatedKids, err = childPages(conf, p.ID, *depth, &budget); err != nil {
+			return err
+		}
+	}
 	if *asJSON {
-		return writeJSON(stdout, raw)
+		if !*children {
+			return writeJSON(stdout, raw)
+		}
+		if kids == nil {
+			kids = []childPage{}
+		}
+		combined, err := json.Marshal(map[string]any{"page": json.RawMessage(raw), "children": kids, "truncated": truncatedKids})
+		if err != nil {
+			return fail(exitAPI, "encoding JSON: %v", err)
+		}
+		return writeJSON(stdout, combined)
 	}
 
 	var b strings.Builder
@@ -171,22 +284,68 @@ func cmdPage(args []string, stdout, stderr io.Writer) error {
 	}
 	fmt.Fprintf(&b, "URL: %s%s\n\n", conf.base, p.Links.WebUI)
 
-	body, err := htmlToMarkdown(p.Body.View.Value)
-	if err != nil {
-		return fail(exitAPI, "converting page %s to Markdown: %v", id, err)
+	if needBody {
+		md, err := htmlToMarkdown(p.Body.View.Value)
+		if err != nil {
+			return fail(exitAPI, "converting page %s to Markdown: %v", id, err)
+		}
+		body := demoteHeadings(md, 2)
+		lines := strings.Split(body, "\n")
+		hs := scanHeadings(lines)
+		if *toc {
+			writeTOC(&b, lines, hs)
+			fmt.Fprintf(&b, "\n(read one with: atl page %s --section \"<heading>\")\n", p.ID)
+		}
+		if len(sections) > 0 {
+			var parts []string
+			for _, q := range sections {
+				found, err := findSections(hs, q)
+				if err != nil {
+					return err
+				}
+				for _, h := range found {
+					parts = append(parts, strings.TrimSpace(strings.Join(lines[h.start:h.end], "\n")))
+				}
+			}
+			if *toc {
+				b.WriteString("\n")
+			}
+			fmt.Fprintln(&b, truncateBody(strings.Join(parts, "\n\n"), *maxChars))
+		} else if !*toc {
+			fmt.Fprintln(&b, or(truncateBody(body, *maxChars), "(empty page)"))
+		}
+		// Attachments are context; a page whose attachments cannot be listed still prints.
+		if len(sections) == 0 {
+			if atts, err := pageAttachments(conf, p.ID); err != nil {
+				fmt.Fprintf(&b, "\n(attachments unavailable: %v)\n", err)
+			} else {
+				writeAttachments(&b, atts, "atl attachment <id>")
+			}
+		}
 	}
-	if runes := []rune(body); *maxChars > 0 && len(runes) > *maxChars {
-		body = fmt.Sprintf("%s\n\n[truncated at %d of %d characters; --max-chars 0 for all]", string(runes[:*maxChars]), *maxChars, len(runes))
-	}
-	fmt.Fprintln(&b, or(body, "(empty page)"))
-	// Attachments are context; a page whose attachments cannot be listed still prints.
-	if atts, err := pageAttachments(conf, p.ID); err != nil {
-		fmt.Fprintf(&b, "\n(attachments unavailable: %v)\n", err)
-	} else {
-		writeAttachments(&b, atts, "atl attachment <id>")
+
+	if *children {
+		if needBody {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "## Child pages (%d)\n\n", countPages(kids))
+		if len(kids) == 0 {
+			b.WriteString("(none)\n")
+		}
+		writeChildren(&b, conf.base, kids, "")
+		if truncatedKids {
+			fmt.Fprintf(&b, "\n(stopped at %d pages; list a child page's children instead)\n", maxChildPages)
+		}
 	}
 	_, err = io.WriteString(stdout, b.String())
 	return err
+}
+
+func truncateBody(body string, maxChars int) string {
+	if runes := []rune(body); maxChars > 0 && len(runes) > maxChars {
+		return fmt.Sprintf("%s\n\n[truncated at %d of %d characters; --max-chars 0 for all]", string(runes[:maxChars]), maxChars, len(runes))
+	}
+	return body
 }
 
 func cqlString(s string) string {

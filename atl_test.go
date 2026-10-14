@@ -120,10 +120,10 @@ func fakeServer(t *testing.T) *httptest.Server {
 		],
 		"comment":{"comments":[{"id":"501","author":{"displayName":"Cy"},"created":"2026-10-03T08:00:00.000+0000","body":"Also BASE/wiki/x/KgAAAA."}]}
 	}`, `{
-		"description":"<p>See <a href=\"BASE/wiki/display/DEV/Login+Flow\">Login Flow</a>.</p><h3>Steps</h3><ul><li>open page</li></ul>",
+		"description":"<p>See <a href=\"BASE/wiki/display/DEV/Login+Flow\">Login Flow</a>.</p><h1>Steps</h1><ul><li>open page</li></ul>",
 		"customfield_10011":"<ul><li>Login <b>works</b></li><li>Logout works</li></ul>",
 		"customfield_10010":"5",
-		"comment":{"comments":[{"id":"501","body":"<p>Also <em>this</em>.</p>"}]}
+		"comment":{"comments":[{"id":"501","body":"<p>Also <em>this</em>.</p><h2>Note</h2><p>n</p>"}]}
 	}`)
 	issueReply("PROJ-1", `{"summary":"Login epic","status":{"name":"In Progress","statusCategory":{"key":"indeterminate"}},"issuetype":{"name":"Epic"}}`, "")
 	issueReply("PROJ-124", `{"summary":"Tests","issuetype":{"name":"Sub-task"},"parent":{"key":"PROJ-123","fields":{"summary":"Fix login"}}}`, "")
@@ -256,6 +256,33 @@ func fakeServer(t *testing.T) *httptest.Server {
 	jsonReply("/wiki/rest/api/content/42/child/attachment", `{"results":[`+diagram+`],"size":1}`)
 	jsonReply("/wiki/rest/api/content/att900", diagram)
 	file("/wiki/download/attachments/42/diagram.png", "image/png", "\x89PNG")
+	jsonReply("/wiki/rest/api/content/77", `{"id":"77","title":"Design","space":{"key":"DEV","name":"Development"},
+		"version":{"number":1,"when":"2026-09-01T08:00:00.000Z"},"_links":{"webui":"/display/DEV/Design"},
+		"body":{"view":{"value":"`+outlineHTML+`"}}}`)
+	jsonReply("/wiki/rest/api/content/77/child/attachment", `{"results":[],"size":0}`)
+	// 77 has more children than one batch, so listing them takes two requests.
+	reply("/wiki/rest/api/content/77/child/page", func(r *http.Request) string {
+		start, _ := strconv.Atoi(r.URL.Query().Get("start"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		var items []string
+		for i := start; i < min(start+limit, childCount); i++ {
+			items = append(items, fmt.Sprintf(`{"id":"%d","title":"Child %d","version":{"when":"2026-09-0%dT10:00:00.000Z"},"_links":{"webui":"/pages/%d"}}`, 1000+i, i, 1+i%9, 1000+i))
+		}
+		next := ""
+		if start+limit < childCount {
+			next = `,"next":"/rest/api/content/77/child/page?start=x"`
+		}
+		return fmt.Sprintf(`{"results":[%s],"size":%d,"_links":{"base":"BASE"%s}}`, strings.Join(items, ","), len(items), next)
+	})
+	jsonReply("/wiki/rest/api/content/1000/child/page", `{"results":[{"id":"2000","title":"Grandchild","version":{"when":"2026-09-05T10:00:00.000Z"},"_links":{"webui":"/pages/2000"}}],"size":1,"_links":{}}`)
+	// Every other page is a leaf; anything else under content/ stays a 404.
+	mux.HandleFunc("/wiki/rest/api/content/", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/child/page") {
+			http.NotFound(w, r)
+		} else if authorized(w, r) {
+			fmt.Fprint(w, `{"results":[],"size":0,"_links":{}}`)
+		}
+	})
 	mux.HandleFunc("/", http.NotFound)
 
 	srv = httptest.NewServer(mux)
@@ -501,6 +528,7 @@ func TestPageRefs(t *testing.T) {
 		srv.URL + "/wiki/pages/viewpage.action?pageId=42",
 		srv.URL + "/wiki/spaces/DEV/pages/42/Login+spec",
 		srv.URL + "/wiki/display/DEV/Login+Flow",
+		srv.URL + "/wiki/display/DEV/2026/09/30/Login+Flow", // blog post URL
 		srv.URL + "/wiki/x/KgAAAA",
 		srv.URL + "/wiki/x/zzzz", // decodes to a missing page; resolved by redirect
 	} {
@@ -1140,5 +1168,231 @@ func TestLineDiff(t *testing.T) {
 	long := strings.Repeat("x", historyLineChars+10)
 	if got := longChange("Summary", "", long); !strings.HasSuffix(got[1], "…") {
 		t.Errorf("long diff lines should be clipped: %q", got)
+	}
+}
+
+const childCount = 52
+
+// outlineHTML is a page with nested, repeated and decoy headings: a '#' inside
+// fenced code and a heading inside a table cell are content, not structure.
+var outlineHTML = strings.NewReplacer(`"`, `\"`).Replace(
+	`<p>Intro text.</p>` +
+		`<h1>Overview</h1><p>Why this exists.</p>` +
+		`<h2>Goals</h2><p>Fast login.</p>` +
+		`<h3>Non-goals</h3><p>SSO.</p>` +
+		`<h2>Notes</h2><p>First notes.</p>` +
+		`<h1>Implementation details</h1><pre><code># not a heading\nrun()</code></pre>` +
+		`<table><tr><td><h2>Cell heading</h2></td></tr></table>` +
+		`<h2>Notes</h2><p>Second notes.</p>` +
+		`<h1>Implementation plan</h1><p>Phase 1.</p>`)
+
+func TestPageDemotesHeadings(t *testing.T) {
+	setup(t)
+	out, errs, code := runAtl(t, "page", "77")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	mustContain(t, out, "# Design\n", "\n## Overview\n", "\n### Goals\n", "\n#### Non-goals\n", "# not a heading",
+		"| **Cell heading** |")
+	if strings.Contains(out, "\n# Overview") {
+		t.Errorf("page h1 should nest under the title:\n%s", out)
+	}
+
+	out, _, _ = runAtl(t, "issue", "PROJ-123", "--comments")
+	mustContain(t, out, "\n### Steps\n", "\n#### Note\n")
+}
+
+func TestPageTOC(t *testing.T) {
+	setup(t)
+	out, errs, code := runAtl(t, "page", "77", "--toc")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	mustContain(t, out, "# Design", "## Contents (7 headings,", "- (before the first heading) — 11 chars",
+		"\n- Overview — ", "\n  - Goals — ", "\n    - Non-goals — ", "\n- Implementation details — ",
+		`atl page 77 --section "<heading>"`)
+	if strings.Contains(out, "Why this exists") || strings.Contains(out, "not a heading —") || strings.Contains(out, "Cell heading —") {
+		t.Errorf("toc should hold headings only, without decoys:\n%s", out)
+	}
+
+	lines := strings.Split(demoteHeadings("intro\n## A\naaaa\n### B\nbb\n## C\nc", 2), "\n")
+	var b strings.Builder
+	writeTOC(&b, lines, scanHeadings(lines))
+	mustContain(t, b.String(), "- (before the first heading) — 5 chars\n- A — 18 chars\n  - B — 8 chars\n- C — 6 chars")
+
+	b.Reset()
+	writeTOC(&b, []string{"no headings"}, nil)
+	mustContain(t, b.String(), "(no headings; read the whole page)")
+}
+
+func TestPageSection(t *testing.T) {
+	setup(t)
+	section := func(args ...string) (string, string, int) {
+		return runAtl(t, append([]string{"page", "77"}, args...)...)
+	}
+
+	out, errs, code := section("--section", "overview")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	mustContain(t, out, "# Design", "## Overview\n\nWhy this exists.", "### Goals", "#### Non-goals\n\nSSO.", "First notes.")
+	for _, absent := range []string{"Intro text", "Implementation", "Second notes", "## Attachments"} {
+		if strings.Contains(out, absent) {
+			t.Errorf("section should stop at the next same-level heading, found %q:\n%s", absent, out)
+		}
+	}
+
+	out, _, _ = section("--section", "Notes")
+	mustContain(t, out, "First notes.", "Second notes.")
+
+	out, _, code = section("--section", "non", "--section", "Implementation p")
+	if code != 0 {
+		t.Fatalf("prefix sections: exit %d", code)
+	}
+	mustContain(t, out, "SSO.", "Phase 1.")
+	if strings.Index(out, "SSO.") > strings.Index(out, "Phase 1.") {
+		t.Errorf("sections should print in the order asked:\n%s", out)
+	}
+
+	out, _, _ = section("--section", "goals")
+	mustContain(t, out, "Fast login.")
+	if strings.Contains(out, "Why this exists") {
+		t.Errorf("exact match should win over substring:\n%s", out)
+	}
+
+	if _, _, code := section("--section", "phase"); code != exitNotFound {
+		t.Errorf("sections match titles, not body text: exit %d", code)
+	}
+
+	if _, errs, code := section("--section", "Implementation"); code != exitUsage || !strings.Contains(errs, "ambiguous") ||
+		!strings.Contains(errs, "Implementation details") || !strings.Contains(errs, "Implementation plan") {
+		t.Errorf("ambiguous prefix: exit %d, %s", code, errs)
+	}
+	if _, errs, code := section("--section", "tion"); code != exitUsage || !strings.Contains(errs, "ambiguous") {
+		t.Errorf("ambiguous substring: exit %d, %s", code, errs)
+	}
+	if _, errs, code := section("--section", "Rollout"); code != exitNotFound || !strings.Contains(errs, "headings are:\n  Overview\n    Goals") {
+		t.Errorf("missing section: exit %d, %s", code, errs)
+	}
+	if _, errs, code := runAtl(t, "page", "42", "--section", "Nope", "--section", "flow"); code != exitNotFound || !strings.Contains(errs, "Flow") {
+		t.Errorf("missing section on another page: exit %d, %s", code, errs)
+	}
+	if _, err := findSections(nil, "x"); err == nil || !strings.Contains(err.Error(), "no headings") {
+		t.Errorf("headingless page: %v", err)
+	}
+
+	out, _, _ = section("--section", "overview", "--max-chars", "10")
+	mustContain(t, out, "[truncated at 10 of")
+
+	out, _, _ = section("--toc", "--section", "Implementation plan")
+	mustContain(t, out, "## Contents", "Phase 1.")
+	if strings.Contains(out, "## Attachments") {
+		t.Errorf("--section output should skip attachments:\n%s", out)
+	}
+
+	if _, errs, code := section("--toc", "--json"); code != exitUsage || !strings.Contains(errs, "--json") {
+		t.Errorf("--toc --json: exit %d, %s", code, errs)
+	}
+}
+
+func TestPageChildren(t *testing.T) {
+	srv := setup(t)
+	out, errs, code := runAtl(t, "page", "77", "--children")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	mustContain(t, out, "# Design", "## Child pages (52)", "- Child 0 — id 1000 · updated 2026-09-01 10:00\n  "+srv.URL+"/wiki/pages/1000", "- Child 51 — id 1051")
+	if strings.Contains(out, "Why this exists") || strings.Contains(out, "Grandchild") || strings.Contains(out, "## Attachments") {
+		t.Errorf("--children alone lists one level and no body:\n%s", out)
+	}
+
+	out, _, _ = runAtl(t, "page", "77", "--children", "--depth", "2")
+	mustContain(t, out, "## Child pages (53)", "- Child 0 — id 1000", "\n  - Grandchild — id 2000 · updated 2026-09-05 10:00\n    "+srv.URL+"/wiki/pages/2000")
+
+	out, _, _ = runAtl(t, "page", "77", "--children", "--toc")
+	mustContain(t, out, "## Contents", "\n\n## Child pages (52)")
+	if strings.Count(out, "# Design") != 1 || strings.Contains(out, "Why this exists") {
+		t.Errorf("--children --toc prints the header once and no body:\n%s", out)
+	}
+
+	out, _, _ = runAtl(t, "page", "42", "--children")
+	mustContain(t, out, "## Child pages (0)\n\n(none)")
+
+	saved := maxChildPages
+	maxChildPages = 51
+	t.Cleanup(func() { maxChildPages = saved })
+	out, _, _ = runAtl(t, "page", "77", "--children", "--depth", "3")
+	mustContain(t, out, "## Child pages (51)", "(stopped at 51 pages")
+	maxChildPages = 50
+	out, _, _ = runAtl(t, "page", "77", "--children")
+	mustContain(t, out, "## Child pages (50)", "(stopped at 50 pages")
+	maxChildPages = saved
+
+	out, errs, code = runAtl(t, "page", "77", "--children", "--depth", "2", "--json")
+	if code != 0 {
+		t.Fatalf("json: exit %d: %s", code, errs)
+	}
+	var got struct {
+		Page struct {
+			Title string `json:"title"`
+		} `json:"page"`
+		Children []struct {
+			ID       string `json:"id"`
+			Children []struct {
+				Title string `json:"title"`
+			} `json:"children"`
+		} `json:"children"`
+		Truncated bool `json:"truncated"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if got.Page.Title != "Design" || len(got.Children) != childCount || got.Children[0].Children[0].Title != "Grandchild" || got.Truncated {
+		t.Errorf("json tree: %+v", got)
+	}
+	out, _, _ = runAtl(t, "page", "42", "--children", "--json")
+	mustContain(t, out, `"children": []`)
+
+	for _, d := range []string{"0", "4"} {
+		if _, errs, code := runAtl(t, "page", "77", "--children", "--depth", d); code != exitUsage || !strings.Contains(errs, "--depth") {
+			t.Errorf("depth %s: exit %d, %s", d, code, errs)
+		}
+	}
+}
+
+func TestDemoteHeadings(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		min  int
+		want string
+	}{
+		{"# A\n## B", 3, "### A\n#### B"},
+		{"### A\n#### B", 2, "### A\n#### B"},
+		{"# A\n###### F", 3, "### A\n###### F"},
+		{"no headings", 3, "no headings"},
+		{"```\n# code\n```\n# Real", 2, "```\n# code\n```\n## Real"},
+		{"~~~~\n# code\n~~~\n# still code\n~~~~\n#Tag", 2, "~~~~\n# code\n~~~\n# still code\n~~~~\n#Tag"},
+		{"  # indented\n- # in list", 2, "  # indented\n- # in list"},
+	} {
+		if got := demoteHeadings(tc.in, tc.min); got != tc.want {
+			t.Errorf("demoteHeadings(%q, %d) = %q, want %q", tc.in, tc.min, got, tc.want)
+		}
+	}
+	if got := plainTitle(`**Bold** [link](http://x) \_under\_ ` + "`code`" + ` ##`); got != "Bold link _under_ code ##" {
+		t.Errorf("plainTitle = %q", got)
+	}
+	hs := scanHeadings(strings.Split("## Closed ##\ntext", "\n"))
+	if len(hs) != 1 || hs[0].title != "Closed" {
+		t.Errorf("closing hashes: %+v", hs)
+	}
+	md, err := htmlToMarkdown(`<table><tr><th>Name</th></tr><tr><td><h2>Cell</h2><p>a</p><p>b</p></td></tr></table><p>x <del>y</del></p>`)
+	if err != nil || md != "| Name |\n|---|\n| **Cell**<br>a<br>b |\n\nx ~~y~~" {
+		t.Errorf("htmlToMarkdown table = %q, %v", md, err)
+	}
+	var f stringsFlag
+	_ = f.Set("a")
+	_ = f.Set("b")
+	if f.String() != "a, b" {
+		t.Errorf("stringsFlag = %q", f.String())
 	}
 }

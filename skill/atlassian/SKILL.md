@@ -24,6 +24,9 @@ atl attachment             # download the branch issue's attachments; prints the
 atl attachment 10010 att900    # specific files: Jira ids from atl issue, att… ids from atl page
 atl page <id|url>          # Confluence page as Markdown; any page URL form works
 atl page <url> --max-chars 0   # whole page; default truncates at 40000 characters
+atl page <url> --toc       # headings with section sizes, no body
+atl page <url> --section "Error handling" --section "Rollout"   # just those parts
+atl page <url> --children  # child pages; --depth 2 for grandchildren
 atl search "login flow" --space DEV
 atl search 'title ~ "runbook" AND space = OPS' --cql
 ```
@@ -44,7 +47,14 @@ atl search 'title ~ "runbook" AND space = OPS' --cql
    task; do not walk the whole link graph.
 3. **Confluence pages.** The `## Confluence` section lists pages linked from
    the issue (remote links, description, comments). Open the ones relevant to
-   the task with `atl page <url>`, not all of them.
+   the task with `atl page <url>`, not all of them. For a long page — the
+   output says `[truncated at …]`, or the page is a big spec — run
+   `atl page <url> --toc` first and then read the relevant parts with
+   `--section "<heading>"` instead of raising `--max-chars`. A heading that
+   matches several sections exits 2 and lists them; use a longer title.
+   When the page is the root of a doc tree (an index, a design with
+   sub-pages), `atl page <url> --children` lists its child pages to open
+   next.
 4. **Search** when the issue refers to documentation, a design or a decision
    without linking it. Prefer a `--space` filter when you know the space.
 5. **Comments** often hold late requirement changes; add `--comments` when the

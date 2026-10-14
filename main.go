@@ -19,7 +19,9 @@ const usage = `atl: read-only Jira and Confluence lookups
                                               who changed what, oldest first
   atl attachment [KEY | ID...] [--dir DIR] [--max-bytes N] [--json]
                                               download attachments, print saved paths
-  atl page <id|url> [--max-chars N] [--json]  Confluence page as Markdown
+  atl page <id|url> [--toc] [--section H]... [--children [--depth N]] [--max-chars N] [--json]
+                                              Confluence page as Markdown, its outline,
+                                              chosen sections, or its child pages
   atl search <text> [--space KEY] [--cql] [--limit N] [--json]
 
 KEY defaults to the issue key in the current git branch.

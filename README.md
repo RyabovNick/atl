@@ -19,12 +19,29 @@ atl issue PROJ-123    # first real check
 | `atl history [KEY]` | who changed which field and when, oldest first; `--since 2026-10-01` or `--since 7d` narrows it |
 | `atl attachment [KEY \| ID...]` | downloads all of an issue's attachments, or the given Jira ids / Confluence `att<digits>` ids, and prints the saved paths |
 | `atl page <id\|url>` | a page as Markdown, with its attachments; accepts `pageId=`, `/pages/<id>`, `/display/SPACE/Title` and `/x/<tiny>` URLs |
+| `atl page <ref> --toc` | the page's headings, indented by level, with each section's size in characters |
+| `atl page <ref> --section <heading>` | only the matching sections, subsections included; repeatable |
+| `atl page <ref> --children [--depth 2]` | child pages with id, update time and URL, instead of the body |
 | `atl search <text>` | pages and blog posts matching `text ~`, or raw CQL with `--cql` |
 
 `atl issue` renders the description, long custom text fields and comments
 from Jira's rendered HTML into Markdown, falling back to raw wiki markup when
 Jira returns none. Custom fields with no readable value (rank, epic colour,
 development summary, bare ids) are left out.
+
+HTML becomes Markdown with GitHub-style tables; a heading inside a table cell
+becomes bold text, since a Markdown table cannot hold one. Headings inside
+embedded content are shifted down to nest under atl's own sections: a page's
+headings start at `##` under its `# Title`, and a description's at `###`
+under `## Description`.
+
+`atl page --section` matches headings case-insensitively: every section with
+exactly that title, otherwise a unique prefix, otherwise a unique substring.
+An ambiguous match exits 2 and no match exits 4, both listing the headings.
+`--toc` and `--section` combine (outline, then sections), and so do either of
+them with `--children`, which on its own skips the body. `--max-chars` applies
+to whatever body text is printed. `--children` follows pagination and stops at
+500 pages.
 
 `atl epic` finds children with `"Epic Link" = KEY OR parent = KEY` when the
 instance has the Epic Link field, and `parent = KEY` otherwise. A query Jira or
