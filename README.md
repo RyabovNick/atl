@@ -13,9 +13,14 @@ atl issue PROJ-123    # first real check
 
 | Command | Returns |
 | --- | --- |
-| `atl issue [KEY]` | fields, open blockers, linked issues (one level), subtasks, Confluence and other links; KEY defaults to the current branch's |
+| `atl issue [KEY]` | fields, custom fields by name, open blockers, linked issues (one level), subtasks, Confluence and other links; KEY defaults to the current branch's |
 | `atl page <id\|url>` | a page as Markdown; accepts `pageId=`, `/pages/<id>`, `/display/SPACE/Title` and `/x/<tiny>` URLs |
 | `atl search <text>` | pages and blog posts matching `text ~`, or raw CQL with `--cql` |
+
+`atl issue` renders the description, long custom text fields and comments
+from Jira's rendered HTML into Markdown, falling back to raw wiki markup when
+Jira returns none. Custom fields with no readable value (rank, epic colour,
+development summary, bare ids) are left out.
 
 Environment variables override the config file, which is optional when they
 supply the URL and token. Tokens are sent as `Authorization: Bearer`; a

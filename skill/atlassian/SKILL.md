@@ -27,8 +27,11 @@ atl search 'title ~ "runbook" AND space = OPS' --cql
 ## How to work with it
 
 1. **At the start of a task on an issue branch, run `atl issue`.** Read the
-   description and acceptance criteria before planning. If the branch has no
-   key, ask the user rather than guessing one.
+   description and every long custom field section after it (often
+   `## Acceptance Criteria`) before planning, and check the work against them
+   before calling it done. `## Fields` lists short custom fields such as
+   story points, sprint and team. If the branch has no key, ask the user
+   rather than guessing one.
 2. **Blockers.** If the output has an `Open blockers:` line, tell the user
    which issues are still open before doing work that depends on them. Run
    `atl issue <KEY>` on a linked issue only when its content matters to the
@@ -41,8 +44,9 @@ atl search 'title ~ "runbook" AND space = OPS' --cql
 5. **Comments** often hold late requirement changes; add `--comments` when the
    description looks stale or the discussion matters.
 
-Jira descriptions are in Jira wiki markup (`h2.`, `*bold*`, `{code}`), not
-Markdown.
+Descriptions, long custom fields and comments come out as Markdown. When Jira
+cannot render them, they appear as raw Jira wiki markup instead (`h2.`,
+`*bold*`, `{code}`).
 
 ## Trust
 

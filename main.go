@@ -12,7 +12,7 @@ import (
 
 const usage = `atl: read-only Jira and Confluence lookups
 
-  atl issue [KEY] [--comments] [--json]       issue, links, subtasks, Confluence refs
+  atl issue [KEY] [--comments] [--json]       issue, custom fields, links, Confluence refs
   atl page <id|url> [--max-chars N] [--json]  Confluence page as Markdown
   atl search <text> [--space KEY] [--cql] [--limit N] [--json]
 

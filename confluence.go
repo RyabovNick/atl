@@ -9,15 +9,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-
-	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 )
 
 var (
 	pagesPathRE   = regexp.MustCompile(`/pages/(\d+)`)
 	tinyPathRE    = regexp.MustCompile(`/x/([A-Za-z0-9_-]+)`)
 	displayPathRE = regexp.MustCompile(`/display/([^/]+)/(.+)$`)
-	blankLinesRE  = regexp.MustCompile(`\n{3,}`)
 )
 
 type page struct {
@@ -174,11 +171,10 @@ func cmdPage(args []string, stdout, stderr io.Writer) error {
 	}
 	fmt.Fprintf(&b, "URL: %s%s\n\n", conf.base, p.Links.WebUI)
 
-	body, err := htmltomarkdown.ConvertString(p.Body.View.Value)
+	body, err := htmlToMarkdown(p.Body.View.Value)
 	if err != nil {
 		return fail(exitAPI, "converting page %s to Markdown: %v", id, err)
 	}
-	body = strings.TrimSpace(blankLinesRE.ReplaceAllString(body, "\n\n"))
 	if runes := []rune(body); *maxChars > 0 && len(runes) > *maxChars {
 		body = fmt.Sprintf("%s\n\n[truncated at %d of %d characters; --max-chars 0 for all]", string(runes[:*maxChars]), *maxChars, len(runes))
 	}

@@ -51,6 +51,7 @@ type issueLink struct {
 }
 
 type comment struct {
+	ID      string `json:"id"`
 	Author  *named `json:"author"`
 	Created string `json:"created"`
 	Body    string `json:"body"`
@@ -209,12 +210,7 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fields := []string{
-		"summary", "status", "issuetype", "priority", "assignee", "reporter", "created",
-		"updated", "resolution", "labels", "components", "fixVersions", "description",
-		"issuelinks", "subtasks", "parent", "comment",
-	}
-	var allFields []struct{ ID, Name string }
+	var allFields []fieldDef
 	if _, err := jira.get("/rest/api/2/field", nil, &allFields); err != nil {
 		return err
 	}
@@ -222,15 +218,22 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 	for _, f := range allFields {
 		if f.Name == "Epic Link" {
 			epicField = f.ID
-			fields = append(fields, f.ID)
 		}
 	}
 
 	var is issue
 	path := "/rest/api/2/issue/" + url.PathEscape(key)
-	rawIssue, err := jira.get(path, url.Values{"fields": {strings.Join(fields, ",")}}, &is)
+	// Custom field ids can number in the hundreds, too many to list in a URL.
+	rawIssue, err := jira.get(path, url.Values{"fields": {"*all"}, "expand": {"renderedFields"}}, &is)
 	if err != nil {
 		return err
+	}
+	var extra struct {
+		Fields         map[string]json.RawMessage `json:"fields"`
+		RenderedFields map[string]json.RawMessage `json:"renderedFields"`
+	}
+	if err := json.Unmarshal(rawIssue, &extra); err != nil {
+		return fail(exitAPI, "jira: decoding %s: %v", path, err)
 	}
 	var links []remoteLink
 	rawLinks, linkErr := jira.get(path+"/remotelink", nil, &links)
@@ -273,11 +276,8 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 		line("Parent: %s", issueLine(f.Parent))
 	}
 	if epicField != "" {
-		var extra struct {
-			Fields map[string]json.RawMessage `json:"fields"`
-		}
 		var epic string
-		if json.Unmarshal(rawIssue, &extra) == nil && json.Unmarshal(extra.Fields[epicField], &epic) == nil && epic != "" {
+		if json.Unmarshal(extra.Fields[epicField], &epic) == nil && epic != "" {
 			line("Epic: %s", epic)
 		}
 	}
@@ -310,8 +310,20 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 	}
 	listLine("Open blockers", blockers)
 
+	shortFields, longFields := customFields(allFields, extra.Fields, extra.RenderedFields, epicField)
+	if len(shortFields) > 0 {
+		line("\n## Fields\n")
+		for _, fv := range shortFields {
+			line("- %s: %s", fv.name, fv.value)
+		}
+	}
+
 	line("\n## Description\n")
-	line("%s", or(strings.TrimSpace(f.Description), "(empty)"))
+	line("%s", or(richText(extra.RenderedFields["description"], f.Description), "(empty)"))
+	for _, fv := range longFields {
+		line("\n## %s\n", fv.name)
+		line("%s", fv.value)
+	}
 
 	if len(rels) > 0 {
 		sort.SliceStable(rels, func(i, j int) bool {
@@ -359,10 +371,21 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 	cs := f.Comment.Comments
 	switch {
 	case *comments:
+		var rendered struct {
+			Comments []struct {
+				ID   string          `json:"id"`
+				Body json.RawMessage `json:"body"`
+			} `json:"comments"`
+		}
+		_ = json.Unmarshal(extra.RenderedFields["comment"], &rendered)
+		renderedBody := map[string]json.RawMessage{}
+		for _, rc := range rendered.Comments {
+			renderedBody[rc.ID] = rc.Body
+		}
 		line("\n## Comments (%d)", len(cs))
 		for _, c := range cs {
 			line("\n### %s — %s\n", or(nameOf(c.Author), "?"), shortDate(c.Created))
-			line("%s", strings.TrimSpace(c.Body))
+			line("%s", richText(renderedBody[c.ID], c.Body))
 		}
 	case len(cs) > 0:
 		line("\n(%d comments; add --comments to read them)", len(cs))
