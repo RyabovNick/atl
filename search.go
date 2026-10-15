@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -122,7 +123,7 @@ func fetchEpicCandidate(jira *client, key, epicField string) (*epicCandidate, er
 
 // resolveEpic walks from an issue to its epic: its Epic Link, or its parent's
 // when it is a subtask. An issue with neither is taken as the epic itself, since
-// localised instances do not call the type "Epic".
+// localized instances do not call the type "Epic".
 func resolveEpic(jira *client, key, epicField string, stderr io.Writer) (*epicCandidate, error) {
 	c, err := fetchEpicCandidate(jira, key, epicField)
 	if err != nil {
@@ -202,7 +203,10 @@ func cmdEpic(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if *asJSON {
-		combined, _ := json.Marshal(map[string]json.RawMessage{"epic": epic.raw, "children": raw})
+		combined, err := json.Marshal(map[string]json.RawMessage{"epic": epic.raw, "children": raw})
+		if err != nil {
+			return fail(exitAPI, "encoding JSON: %v", err)
+		}
 		return writeJSON(stdout, combined)
 	}
 
@@ -213,9 +217,9 @@ func cmdEpic(args []string, stdout, stderr io.Writer) error {
 	}
 	order := []string{"To do", "In progress", "Done", "Other"}
 	var counts []string
-	for i := len(order) - 1; i >= 0; i-- {
-		if n := len(groups[order[i]]); n > 0 {
-			counts = append(counts, fmt.Sprintf("%d %s", n, strings.ToLower(order[i])))
+	for _, o := range slices.Backward(order) {
+		if n := len(groups[o]); n > 0 {
+			counts = append(counts, fmt.Sprintf("%d %s", n, strings.ToLower(o)))
 		}
 	}
 

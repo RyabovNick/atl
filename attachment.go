@@ -115,12 +115,13 @@ func safeFilename(name, fallback string) string {
 func createUnique(dir, name string) (*os.File, error) {
 	ext := filepath.Ext(name)
 	stem := strings.TrimSuffix(name, ext)
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		candidate := name
 		if i > 0 {
 			candidate = fmt.Sprintf("%s-%d%s", stem, i, ext)
 		}
-		f, err := os.OpenFile(filepath.Join(dir, candidate), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		// name comes from safeFilename, which strips path separators and leading dots.
+		f, err := os.OpenFile(filepath.Join(dir, candidate), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // G703: name is sanitized
 		if errors.Is(err, os.ErrExist) {
 			continue
 		}
@@ -305,7 +306,10 @@ func cmdAttachment(args []string, stdout, stderr io.Writer) error {
 		if saved == nil {
 			saved = []savedFile{}
 		}
-		raw, _ := json.Marshal(saved)
+		raw, err := json.Marshal(saved)
+		if err != nil {
+			return fail(exitAPI, "encoding JSON: %v", err)
+		}
 		if err := writeJSON(stdout, raw); err != nil {
 			return err
 		}

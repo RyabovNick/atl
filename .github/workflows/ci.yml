@@ -9,29 +9,50 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      # setup-go caches the module download and build caches, keyed on go.sum.
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
-      - run: go vet ./...
-      - run: go test -race -cover ./...
+      - name: go mod tidy
+        run: go mod tidy -diff
+      - name: test
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+      - name: coverage
+        run: go tool cover -func=coverage.out | tail -n 1
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # The action caches golangci-lint's analysis between runs. Bump the version
+      # here and locally together; .golangci.yml holds the linters.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
 
   # Tag vX.Y.Z to release: make dist builds every platform plus SHA256SUMS,
   # and the release holds them, which is what install.sh downloads.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: test
+    needs: [test, lint]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - run: make dist VERSION="$GITHUB_REF_NAME"

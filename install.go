@@ -201,10 +201,10 @@ func installBinary(binDir string) (string, string, error) {
 		src, err = filepath.EvalSymlinks(src)
 	}
 	if err != nil {
-		return dst, "", fmt.Errorf("cannot find the running binary: %v", err)
+		return dst, "", fmt.Errorf("cannot find the running binary: %w", err)
 	}
-	if si, err := os.Stat(src); err == nil {
-		if di, err := os.Stat(dst); err == nil && os.SameFile(si, di) {
+	if si, srcErr := os.Stat(src); srcErr == nil {
+		if di, dstErr := os.Stat(dst); dstErr == nil && os.SameFile(si, di) {
 			return dst, "unchanged", nil
 		}
 	}
@@ -292,9 +292,9 @@ func cmdInstall(args []string, stdout, stderr io.Writer) error {
 	if *noBinary {
 		steps = append(steps, step{"binary", "", "skipped (--no-binary)"})
 	} else {
-		path, status, err := installBinary(*binDir)
-		if err != nil {
-			return fail(exitAPI, "installing the binary to %s: %v", path, err)
+		path, status, binErr := installBinary(*binDir)
+		if binErr != nil {
+			return fail(exitAPI, "installing the binary to %s: %v", path, binErr)
 		}
 		steps = append(steps, step{"binary", path, status})
 	}
@@ -311,8 +311,7 @@ func cmdInstall(args []string, stdout, stderr io.Writer) error {
 	} else {
 		path, status, err := installAgents(dir, *force)
 		if err != nil {
-			var ae *atlError
-			if errors.As(err, &ae) {
+			if _, ok := errors.AsType[*atlError](err); ok {
 				return err
 			}
 			return fail(exitAPI, "writing %s: %v", path, err)

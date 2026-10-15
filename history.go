@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -12,7 +13,7 @@ import (
 
 const (
 	jiraTime = "2006-01-02T15:04:05.000-0700"
-	// Long text edits are summarised with a line diff, capped so a rewritten
+	// Long text edits are summarized with a line diff, capped so a rewritten
 	// description does not print both versions in full.
 	historyDiffLines = 20
 	historyDiffInput = 200
@@ -118,9 +119,9 @@ func lineDiff(a, b []string) []string {
 	for i := range lcs {
 		lcs[i] = make([]int, len(b)+1)
 	}
-	for i := len(a) - 1; i >= 0; i-- {
+	for i, v := range slices.Backward(a) {
 		for j := len(b) - 1; j >= 0; j-- {
-			if a[i] == b[j] {
+			if v == b[j] {
 				lcs[i][j] = lcs[i+1][j+1] + 1
 			} else {
 				lcs[i][j] = max(lcs[i+1][j], lcs[i][j+1])
@@ -182,7 +183,7 @@ func changeLines(it changeItem, names fieldNames) []string {
 }
 
 func cmdHistory(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("history", "[KEY]", "Who changed what on a Jira issue, oldest first. Long text edits are summarised as a line diff.\nKEY defaults to the issue key in the current git branch.", stderr)
+	fs := newFlags("history", "[KEY]", "Who changed what on a Jira issue, oldest first. Long text edits are summarized as a line diff.\nKEY defaults to the issue key in the current git branch.", stderr)
 	since := fs.String("since", "", "only changes on or after a date (2026-10-01) or within a duration (7d, 2w, 48h)")
 	asJSON := fs.Bool("json", false, "print the raw API response")
 	pos, err := parseFlags(fs, args)
@@ -205,7 +206,7 @@ func cmdHistory(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	var defs []fieldDef
-	if _, err := jira.get("/rest/api/2/field", nil, &defs); err != nil {
+	if _, err = jira.get("/rest/api/2/field", nil, &defs); err != nil {
 		return err
 	}
 	var is historyIssue

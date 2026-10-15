@@ -219,7 +219,7 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	var allFields []fieldDef
-	if _, err := jira.get("/rest/api/2/field", nil, &allFields); err != nil {
+	if _, err = jira.get("/rest/api/2/field", nil, &allFields); err != nil {
 		return err
 	}
 	epicField := ""
@@ -240,7 +240,7 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 		Fields         map[string]json.RawMessage `json:"fields"`
 		RenderedFields map[string]json.RawMessage `json:"renderedFields"`
 	}
-	if err := json.Unmarshal(rawIssue, &extra); err != nil {
+	if err = json.Unmarshal(rawIssue, &extra); err != nil {
 		return fail(exitAPI, "jira: decoding %s: %v", path, err)
 	}
 	var links []remoteLink
@@ -250,7 +250,10 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 		if linkErr != nil {
 			rawLinks = []byte("null")
 		}
-		combined, _ := json.Marshal(map[string]json.RawMessage{"issue": rawIssue, "remotelinks": rawLinks})
+		combined, jsonErr := json.Marshal(map[string]json.RawMessage{"issue": rawIssue, "remotelinks": rawLinks})
+		if jsonErr != nil {
+			return fail(exitAPI, "encoding JSON: %v", jsonErr)
+		}
 		return writeJSON(stdout, combined)
 	}
 
@@ -288,7 +291,7 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 		if json.Unmarshal(extra.Fields[epicField], &epic) == nil && epic != "" {
 			var e issueRef
 			// The epic's summary is context, not essential: show the bare key if it cannot be read.
-			if _, err := jira.get("/rest/api/2/issue/"+url.PathEscape(epic), url.Values{"fields": {"summary,status,issuetype"}}, &e); err == nil {
+			if _, epicErr := jira.get("/rest/api/2/issue/"+url.PathEscape(epic), url.Values{"fields": {"summary,status,issuetype"}}, &e); epicErr == nil {
 				epic = issueLine(&e)
 			}
 			line("Epic: %s", epic)

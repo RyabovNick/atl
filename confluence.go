@@ -264,9 +264,9 @@ body; add --toc or --section to get those as well.`, stderr)
 		if kids == nil {
 			kids = []childPage{}
 		}
-		combined, err := json.Marshal(map[string]any{"page": json.RawMessage(raw), "children": kids, "truncated": truncatedKids})
-		if err != nil {
-			return fail(exitAPI, "encoding JSON: %v", err)
+		combined, jsonErr := json.Marshal(map[string]any{"page": json.RawMessage(raw), "children": kids, "truncated": truncatedKids})
+		if jsonErr != nil {
+			return fail(exitAPI, "encoding JSON: %v", jsonErr)
 		}
 		return writeJSON(stdout, combined)
 	}
@@ -285,9 +285,9 @@ body; add --toc or --section to get those as well.`, stderr)
 	fmt.Fprintf(&b, "URL: %s%s\n\n", conf.base, p.Links.WebUI)
 
 	if needBody {
-		md, err := htmlToMarkdown(p.Body.View.Value)
-		if err != nil {
-			return fail(exitAPI, "converting page %s to Markdown: %v", id, err)
+		md, convErr := htmlToMarkdown(p.Body.View.Value)
+		if convErr != nil {
+			return fail(exitAPI, "converting page %s to Markdown: %v", id, convErr)
 		}
 		body := demoteHeadings(md, 2)
 		lines := strings.Split(body, "\n")
@@ -299,9 +299,9 @@ body; add --toc or --section to get those as well.`, stderr)
 		if len(sections) > 0 {
 			var parts []string
 			for _, q := range sections {
-				found, err := findSections(hs, q)
-				if err != nil {
-					return err
+				found, findErr := findSections(hs, q)
+				if findErr != nil {
+					return findErr
 				}
 				for _, h := range found {
 					parts = append(parts, strings.TrimSpace(strings.Join(lines[h.start:h.end], "\n")))
@@ -316,8 +316,8 @@ body; add --toc or --section to get those as well.`, stderr)
 		}
 		// Attachments are context; a page whose attachments cannot be listed still prints.
 		if len(sections) == 0 {
-			if atts, err := pageAttachments(conf, p.ID); err != nil {
-				fmt.Fprintf(&b, "\n(attachments unavailable: %v)\n", err)
+			if atts, attErr := pageAttachments(conf, p.ID); attErr != nil {
+				fmt.Fprintf(&b, "\n(attachments unavailable: %v)\n", attErr)
 			} else {
 				writeAttachments(&b, atts, "atl attachment <id>")
 			}

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -108,9 +109,7 @@ func settings(name string) (map[string]string, error) {
 		return nil, err
 	}
 	s := map[string]string{}
-	for k, v := range cfg[name] {
-		s[k] = v
-	}
+	maps.Copy(s, cfg[name])
 	p := envPrefix(name)
 	for key, env := range map[string]string{"url": p + "URL", "token": p + "API_TOKEN", "username": p + "USERNAME"} {
 		if v := os.Getenv(env); v != "" {
@@ -120,7 +119,7 @@ func settings(name string) (map[string]string, error) {
 	return s, nil
 }
 
-// optionalBaseURL lets `issue` recognise Confluence links without requiring Confluence credentials.
+// optionalBaseURL lets `issue` recognize Confluence links without requiring Confluence credentials.
 func optionalBaseURL(name string) string {
 	s, err := settings(name)
 	if err != nil {
@@ -210,7 +209,8 @@ func (c *client) raw(path string, params url.Values) (*http.Response, []byte, er
 	if len(params) > 0 {
 		u += "?" + params.Encode()
 	}
-	req, err := http.NewRequest(http.MethodGet, u, nil)
+	// Requesting the user's configured instance is the point of atl.
+	req, err := http.NewRequest(http.MethodGet, u, http.NoBody) //nolint:gosec // G704: u is the configured base URL
 	if err != nil {
 		return nil, nil, fail(exitUsage, "%s: %v", c.name, err)
 	}
@@ -218,7 +218,7 @@ func (c *client) raw(path string, params url.Values) (*http.Response, []byte, er
 	if c.user != "" {
 		req.SetBasicAuth(c.user, c.pass)
 	}
-	resp, err := c.http.Do(req)
+	resp, err := c.http.Do(req) //nolint:gosec // G704: as above
 	if err != nil {
 		return nil, nil, fail(exitAPI, "%s: %v", c.name, err)
 	}

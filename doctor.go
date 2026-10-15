@@ -72,7 +72,7 @@ func inspectConfigFile() (fileStatus, map[string]map[string]string) {
 func describeSettings(name string, file map[string]string) []setting {
 	p := envPrefix(name)
 	envs := map[string]string{"url": p + "URL", "token": p + "API_TOKEN", "username": p + "USERNAME"}
-	var out []setting
+	out := make([]setting, 0, 6)
 	for _, key := range []string{"url", "token", "username", "auth", "ca_bundle", "timeout"} {
 		s := setting{Key: key, Source: "unset"}
 		if env := envs[key]; env != "" && os.Getenv(env) != "" {
@@ -232,12 +232,15 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 	}
 
 	if *asJSON {
-		data, _ := json.Marshal(map[string]any{"config_file": file, "services": reports, "exit": code})
+		data, err := json.Marshal(map[string]any{"config_file": file, "services": reports, "exit": code})
+		if err != nil {
+			return fail(exitAPI, "encoding JSON: %v", err)
+		}
 		if err := writeJSON(stdout, data); err != nil {
 			return err
 		}
-	} else {
-		writeDoctor(stdout, file, reports, code)
+	} else if err := writeDoctor(stdout, file, reports, code); err != nil {
+		return err
 	}
 	if code != 0 {
 		return &atlError{code: code}
@@ -245,7 +248,7 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func writeDoctor(w io.Writer, file fileStatus, reports []serviceReport, code int) {
+func writeDoctor(w io.Writer, file fileStatus, reports []serviceReport, code int) error {
 	var b strings.Builder
 	switch {
 	case file.Error != "":
@@ -274,5 +277,6 @@ func writeDoctor(w io.Writer, file fileStatus, reports []serviceReport, code int
 		fmt.Fprintf(&b, "\nNothing is configured: set %s and/or %s, or create %s.\n",
 			credentialVars("jira"), credentialVars("confluence"), file.Path)
 	}
-	io.WriteString(w, b.String())
+	_, err := io.WriteString(w, b.String())
+	return err
 }

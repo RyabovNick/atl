@@ -25,7 +25,7 @@ func fakeServer(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 	authorized := func(w http.ResponseWriter, r *http.Request) bool {
 		user, pass, basic := r.BasicAuth()
-		if r.Header.Get("Authorization") != "Bearer "+token && !(basic && user == "me" && pass == token) {
+		if r.Header.Get("Authorization") != "Bearer "+token && (!basic || user != "me" || pass != token) {
 			http.Redirect(w, r, "/login.jsp", http.StatusFound)
 			return false
 		}
@@ -295,6 +295,7 @@ func fakeServer(t *testing.T) *httptest.Server {
 
 // clearEnv keeps a developer's real credentials out of the tests.
 func clearEnv(t *testing.T) {
+	t.Helper()
 	for _, svc := range []string{"JIRA", "CONFLUENCE"} {
 		for _, v := range []string{"_URL", "_API_TOKEN", "_USERNAME"} {
 			t.Setenv(svc+v, "")
@@ -313,6 +314,7 @@ func writeConfig(t *testing.T, body string, mode os.FileMode) {
 }
 
 func setup(t *testing.T) *httptest.Server {
+	t.Helper()
 	srv := fakeServer(t)
 	writeConfig(t, fmt.Sprintf("# test\n[jira]\nurl = %[1]s/jira/\ntoken = %[2]s\n\n[confluence]\nurl = %[1]s/wiki\ntoken = %[2]s\n", srv.URL, token), 0o600)
 	return srv
@@ -520,7 +522,7 @@ func TestIssueWithoutConfluenceConfig(t *testing.T) {
 	}
 	mustContain(t, out, "Login spec — ")
 	if strings.Contains(out, "(description)") {
-		t.Errorf("text URLs need a confluence url to be recognised:\n%s", out)
+		t.Errorf("text URLs need a confluence url to be recognized:\n%s", out)
 	}
 }
 

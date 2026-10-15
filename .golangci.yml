@@ -1,0 +1,71 @@
+version: "2"
+
+# Chosen by running every linter against this repo: these find bugs or keep the
+# code idiomatic. Style-only linters (wsl, lll, varnamelen, mnd, exhaustruct,
+# complexity limits) and ones that fight the design (wrapcheck and err113 against
+# atlError, paralleltest against t.Setenv) are deliberately left out.
+linters:
+  # The standard set (errcheck, govet, ineffassign, staticcheck, unused) plus these.
+  enable:
+    # Bugs
+    - asasalint # []any passed as a single any to a variadic func
+    - durationcheck # durations multiplied together
+    - errchkjson # unchecked json.Marshal errors and unsupported types
+    - errorlint # %v instead of %w, == instead of errors.Is
+    - makezero # append to a slice made with a non-zero length
+    - musttag # (un)marshaled structs without json tags; atl decodes many API types
+    - nilerr # returns nil after checking err != nil
+    - nilnesserr # returns a different, nil error
+    - reassign # package variables of other packages reassigned
+    - unparam # parameters that always get the same value
+    - wastedassign # assignments never read
+    # Security
+    - bidichk # trojan-source unicode
+    - gosec
+    # Idioms
+    - copyloopvar
+    - errname
+    - gocheckcompilerdirectives
+    - gochecknoinits
+    - intrange
+    - misspell
+    - modernize
+    - nolintlint
+    - predeclared
+    - revive
+    - thelper
+    - unconvert
+    - usestdlibvars
+    - usetesting
+  settings:
+    govet:
+      enable:
+        - shadow
+    misspell:
+      locale: US
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - path: _test\.go$
+        linters:
+          - errcheck
+          - gosec
+      - path: _test\.go$
+        text: unused-parameter
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

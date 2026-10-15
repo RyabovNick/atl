@@ -98,8 +98,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if err := cmd(args[1:], stdout, stderr); err != nil {
-		var ae *atlError
-		if errors.As(err, &ae) {
+		if ae, ok := errors.AsType[*atlError](err); ok {
 			if ae.msg != "" {
 				fmt.Fprintf(stderr, "atl: %s\n", ae.msg)
 			}
