@@ -203,9 +203,16 @@ func countPages(ps []childPage) int {
 	return n
 }
 
+// pageURL links to a page by id. Confluence's own web links end in the
+// percent-encoded title, which for non-Latin titles gets long enough that
+// agents trim it and hand out links that no longer open.
+func pageURL(base, id string) string {
+	return base + "/pages/viewpage.action?pageId=" + url.QueryEscape(id)
+}
+
 func writeChildren(b *strings.Builder, base string, ps []childPage, indent string) {
 	for _, p := range ps {
-		fmt.Fprintf(b, "%s- %s — id %s · updated %s\n%s  %s%s\n", indent, p.Title, p.ID, atlassian.ShortDate(p.Version.When), indent, base, p.Links.WebUI)
+		fmt.Fprintf(b, "%s- %s — id %s · updated %s\n%s  %s\n", indent, p.Title, p.ID, atlassian.ShortDate(p.Version.When), indent, pageURL(base, p.ID))
 		writeChildren(b, base, p.children, indent+"  ")
 	}
 }
@@ -289,7 +296,7 @@ body; add --toc or --section to get those as well.`, stderr)
 		}
 		fmt.Fprintf(&b, "Path: %s\n", strings.Join(titles, " / "))
 	}
-	fmt.Fprintf(&b, "URL: %s%s\n\n", conf.Base, p.Links.WebUI)
+	fmt.Fprintf(&b, "URL: %s\n\n", pageURL(conf.Base, p.ID))
 
 	if needBody {
 		md, convErr := markdown.FromHTML(p.Body.View.Value)

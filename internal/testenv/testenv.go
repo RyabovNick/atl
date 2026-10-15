@@ -283,7 +283,7 @@ func FakeServer(t *testing.T) *httptest.Server {
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		var items []string
 		for i := start; i < min(start+limit, ChildCount); i++ {
-			items = append(items, fmt.Sprintf(`{"id":"%d","title":"Child %d","version":{"when":"2026-09-0%dT10:00:00.000Z"},"_links":{"webui":"/pages/%d"}}`, 1000+i, i, 1+i%9, 1000+i))
+			items = append(items, fmt.Sprintf(`{"id":"%d","title":"Child %d","version":{"when":"2026-09-0%dT10:00:00.000Z"},"_links":{"webui":"/spaces/DEV/pages/%d/%%D0%%A1%%D1%%85%%D0%%B5%%D0%%BC%%D0%%B0"}}`, 1000+i, i, 1+i%9, 1000+i))
 		}
 		next := ""
 		if start+limit < ChildCount {

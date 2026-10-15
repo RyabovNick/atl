@@ -58,7 +58,7 @@ func RunSearch(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 	for _, r := range res.Results {
-		fmt.Fprintf(stdout, "- %s — %s · updated %s · id %s\n  %s%s\n", r.Title, cli.Or(r.Space.Key, "?"), atlassian.ShortDate(r.Version.When), r.ID, conf.Base, r.Links.WebUI)
+		fmt.Fprintf(stdout, "- %s — %s · updated %s · id %s\n  %s\n", r.Title, cli.Or(r.Space.Key, "?"), atlassian.ShortDate(r.Version.When), r.ID, pageURL(conf.Base, r.ID))
 	}
 	if res.Size >= *limit {
 		fmt.Fprintf(stdout, "(first %d; raise --limit or narrow the query)\n", *limit)

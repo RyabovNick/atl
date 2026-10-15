@@ -37,19 +37,19 @@ func TestPageRefs(t *testing.T) {
 			t.Fatalf("%s: exit %d: %s", ref, code, errs)
 		}
 		testenv.MustContain(t, out, "# Login spec", "Space: Development (DEV) · id 42", "Version 3 by Ann", "Path: Home / Auth",
-			"URL: "+srv.URL+"/wiki/display/DEV/Login+spec", "## Flow", "**log in**", "- one")
+			"URL: "+srv.URL+"/wiki/pages/viewpage.action?pageId=42", "## Flow", "**log in**", "- one")
 	}
 	out, _, _ := runAtl(t, "page", "42", "--max-chars", "5")
 	testenv.MustContain(t, out, "[truncated at 5 of")
 }
 
 func TestSearch(t *testing.T) {
-	testenv.Setup(t)
+	srv := testenv.Setup(t)
 	out, errs, code := runAtl(t, "search", "login", "flow", "--space", "DEV")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errs)
 	}
-	testenv.MustContain(t, out, "- Login spec — DEV · updated 2026-09-30 12:00 · id 42")
+	testenv.MustContain(t, out, "- Login spec — DEV · updated 2026-09-30 12:00 · id 42\n  "+srv.URL+"/wiki/pages/viewpage.action?pageId=42")
 	if got := cqlString(`a "b" \c`); got != `"a \"b\" \\c"` {
 		t.Errorf("cqlString = %s", got)
 	}
@@ -176,13 +176,17 @@ func TestPageChildren(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errs)
 	}
-	testenv.MustContain(t, out, "# Design", "## Child pages (52)", "- Child 0 — id 1000 · updated 2026-09-01 10:00\n  "+srv.URL+"/wiki/pages/1000", "- Child 51 — id 1051")
+	testenv.MustContain(t, out, "# Design", "## Child pages (52)", "- Child 0 — id 1000 · updated 2026-09-01 10:00\n  "+srv.URL+"/wiki/pages/viewpage.action?pageId=1000", "- Child 51 — id 1051")
+	// Confluence's own links end in the percent-encoded title; atl links by id instead.
+	if strings.Contains(out, "%D0") {
+		t.Errorf("child links carry the encoded title:\n%s", out)
+	}
 	if strings.Contains(out, "Why this exists") || strings.Contains(out, "Grandchild") || strings.Contains(out, "## Attachments") {
 		t.Errorf("--children alone lists one level and no body:\n%s", out)
 	}
 
 	out, _, _ = runAtl(t, "page", "77", "--children", "--depth", "2")
-	testenv.MustContain(t, out, "## Child pages (53)", "- Child 0 — id 1000", "\n  - Grandchild — id 2000 · updated 2026-09-05 10:00\n    "+srv.URL+"/wiki/pages/2000")
+	testenv.MustContain(t, out, "## Child pages (53)", "- Child 0 — id 1000", "\n  - Grandchild — id 2000 · updated 2026-09-05 10:00\n    "+srv.URL+"/wiki/pages/viewpage.action?pageId=2000")
 
 	out, _, _ = runAtl(t, "page", "77", "--children", "--toc")
 	testenv.MustContain(t, out, "## Contents", "\n\n## Child pages (52)")
