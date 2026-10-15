@@ -1,15 +1,7 @@
 BIN ?= $(HOME)/.local/bin
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
-
-# defaults.go is the primary place for the built-in URLs; these only override it.
 LDFLAGS := -s -w -X main.version=$(VERSION)
-ifneq ($(JIRA_DEFAULT_URL),)
-LDFLAGS += -X main.defaultJiraURL=$(JIRA_DEFAULT_URL)
-endif
-ifneq ($(CONFLUENCE_DEFAULT_URL),)
-LDFLAGS += -X main.defaultConfluenceURL=$(CONFLUENCE_DEFAULT_URL)
-endif
 
 .PHONY: build test install uninstall dist
 

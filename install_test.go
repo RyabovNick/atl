@@ -311,50 +311,15 @@ func TestVersion(t *testing.T) {
 	}
 }
 
-func setDefaults(t *testing.T, jira, confluence string) {
-	oj, oc := defaultJiraURL, defaultConfluenceURL
-	defaultJiraURL, defaultConfluenceURL = jira, confluence
-	t.Cleanup(func() { defaultJiraURL, defaultConfluenceURL = oj, oc })
-}
-
-func TestBuiltInDefaults(t *testing.T) {
+func TestSettingsPrecedence(t *testing.T) {
 	srv := fakeServer(t)
 	clearEnv(t)
 	t.Setenv("ATL_CONFIG", filepath.Join(t.TempDir(), "absent.ini"))
-	setDefaults(t, srv.URL+"/jira", srv.URL+"/wiki")
 
-	out, _, code := runAtl(t, "doctor")
-	if code != exitConfig {
-		t.Errorf("defaults without tokens: exit %d\n%s", code, out)
-	}
-	mustContain(t, out,
-		"url        "+srv.URL+"/jira (built-in default)",
-		"- jira: not configured",
-		"Nothing is configured: set JIRA_API_TOKEN and/or CONFLUENCE_API_TOKEN",
-	)
-	if _, errs, code := runAtl(t, "issue", "PROJ-123"); code != exitConfig || !strings.Contains(errs, "jira needs a token: set JIRA_API_TOKEN") {
-		t.Errorf("token missing: exit %d, %s", code, errs)
-	}
-
-	t.Setenv("JIRA_API_TOKEN", token)
-	t.Setenv("CONFLUENCE_API_TOKEN", token)
-	out, errs, code := runAtl(t, "issue", "PROJ-123")
-	if code != 0 {
-		t.Fatalf("issue with built-in URLs: exit %d: %s", code, errs)
-	}
-	// The Confluence default also lets issue recognise page URLs in text.
-	mustContain(t, out, "(description)")
-	out, _, code = runAtl(t, "doctor")
-	if code != 0 {
-		t.Fatalf("doctor: exit %d\n%s", code, out)
-	}
-	mustContain(t, out, "✓ jira: authenticated as Ann", "✓ confluence: authenticated as Ann")
-
-	// The config file beats the default, and the environment beats both.
-	setDefaults(t, "http://127.0.0.1:1/unused", srv.URL+"/wiki")
+	// The environment beats the config file.
 	writeConfig(t, fmt.Sprintf("[jira]\nurl = %s/jira\n", srv.URL), 0o600)
 	t.Setenv("JIRA_API_TOKEN", token)
-	out, _, code = runAtl(t, "doctor")
+	out, _, code := runAtl(t, "doctor")
 	if code != 0 {
 		t.Errorf("doctor: exit %d\n%s", code, out)
 	}
@@ -364,14 +329,8 @@ func TestBuiltInDefaults(t *testing.T) {
 	mustContain(t, out, "url        http://127.0.0.1:1/env (JIRA_URL)", "✗ jira")
 
 	t.Setenv("JIRA_URL", "")
-	setDefaults(t, "", "")
 	writeConfig(t, "[jira]\ntoken = t\n", 0o600)
 	if _, errs, code := runAtl(t, "issue", "PROJ-1"); code != exitConfig || !strings.Contains(errs, "jira needs a URL: set JIRA_URL") {
 		t.Errorf("URL missing: exit %d, %s", code, errs)
 	}
-
-	newInstallFixture(t)
-	setDefaults(t, "https://jira.example", "https://wiki.example")
-	out, _, _ = runAtl(t, "install", "--no-binary", "--no-agents")
-	mustContain(t, out, "Set JIRA_API_TOKEN and CONFLUENCE_API_TOKEN in your shell profile")
 }

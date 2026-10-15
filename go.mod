@@ -1,4 +1,4 @@
-module atl
+module github.com/RyabovNick/atl
 
 go 1.27.0
 

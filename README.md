@@ -12,27 +12,27 @@ Each way ends in `atl install`. It copies the binary to `~/.local/bin`
 key. That section sits between `<!-- atl:begin -->` and `<!-- atl:end -->`.
 Rerunning updates it in place and leaves the rest of the file alone.
 
-- **Linux or macOS, no Go:** download [install.sh](install.sh) from the
-  repository and run it. A private project needs `GITLAB_TOKEN`, a personal
-  access token with `read_api`. `ATL_VERSION` picks a release instead of the
-  latest, and other arguments go to `atl install`.
+- **Linux or macOS, no Go:** run [install.sh](install.sh). It downloads the
+  latest release and checks it against `SHA256SUMS`. `ATL_VERSION` picks a
+  release instead of the latest, and other arguments go to `atl install`.
 
   ```bash
-  GITLAB_TOKEN=... sh install.sh
+  curl -fsSL https://raw.githubusercontent.com/RyabovNick/atl/main/install.sh | sh
   ```
-- **A release binary, any system:** download `atl-<os>-<arch>` from the
-  project's Releases page, check it against `SHA256SUMS`, and run
+- **A release binary, any system:** download `atl-<os>-<arch>` from
+  [Releases](https://github.com/RyabovNick/atl/releases), check it against `SHA256SUMS`, and run
   `./atl-<os>-<arch> install`. On Windows, download `atl-windows-amd64.exe`,
   rename it to `atl.exe` and run `atl.exe install`; it installs to
   `%LOCALAPPDATA%\Programs\atl`.
-- **From source:** `make install` (needs Go) runs the tests, builds, and
+- **With Go:** `go install github.com/RyabovNick/atl@latest`, then
+  `atl install`. From a clone, `make install` runs the tests, builds, and
   runs `./atl install`.
 
 Then set the tokens, check them, and restart opencode:
 
 ```bash
-export JIRA_API_TOKEN=... CONFLUENCE_API_TOKEN=...
-# and JIRA_URL / CONFLUENCE_URL unless this build has built-in defaults;
+export JIRA_URL=https://jira.example.com JIRA_API_TOKEN=...
+export CONFLUENCE_URL=https://confluence.example.com CONFLUENCE_API_TOKEN=...
 # or: install -m 600 config.example.ini ~/.config/atl/config.ini and edit it
 atl doctor            # where each setting comes from; does each service accept its token
 ```
@@ -88,19 +88,13 @@ config file is unusable).
 ## Configuration and auth
 
 `JIRA_URL`, `JIRA_API_TOKEN`, `JIRA_USERNAME` and their `CONFLUENCE_*`
-equivalents override `$ATL_CONFIG` or `~/.config/atl/config.ini`, which
-overrides the URLs built into the binary. The file is optional when the
+equivalents override `$ATL_CONFIG` or `~/.config/atl/config.ini`. The file is optional when the
 environment supplies the URL and token; see
 [config.example.ini](config.example.ini) for the other settings (`auth`,
 `ca_bundle`, `timeout`). Tokens are sent as `Authorization: Bearer`; a
 username switches to basic auth. For Confluence use a native personal access
 token (avatar → Settings → Personal Access Tokens) with no username; tokens
 issued by API-token apps can be rejected even when Jira accepts its own.
-
-Data Center rarely says "wrong token" plainly: Jira redirects to its login
-page, and Confluence answers as an anonymous user, so a restricted page looks
-"not found". atl reports the redirect instead of following it, and
-`atl doctor` detects the anonymous user.
 
 ## Security properties
 
@@ -119,19 +113,10 @@ page, and Confluence answers as an anonymous user, so a restricted page looks
 `go test ./...` runs against a fake Jira and Confluence; no instance or token
 is needed. `go test -cover ./...` reports coverage.
 
-## For maintainers
+## Releasing
 
-1. Fill in `defaultJiraURL` and `defaultConfluenceURL` in
-   [defaults.go](defaults.go), so colleagues only need tokens. CI/CD variables
-   `JIRA_DEFAULT_URL` and `CONFLUENCE_DEFAULT_URL` override them without a
-   commit.
-2. Fill in `ATL_GITLAB_URL` and `ATL_PROJECT` at the top of
-   [install.sh](install.sh).
-3. Tag `vX.Y.Z` and push the tag. [.gitlab-ci.yml](.gitlab-ci.yml) tests every
-   branch, merge request and tag. On a version tag it runs `make dist`, which
-   builds Linux, macOS and Windows binaries for amd64 and arm64 plus
-   `SHA256SUMS`. It uploads them to the project's Generic Package Registry
-   (`atl/X.Y.Z`) and creates a release linking them, which is what
-   `install.sh` downloads.
-
-`make dist` builds the same files locally into `dist/`.
+Push a `vX.Y.Z` tag. [CI](.github/workflows/ci.yml) tests every push and pull
+request; on a version tag it runs `make dist`, which builds Linux, macOS and
+Windows binaries for amd64 and arm64 plus `SHA256SUMS`, and attaches them to
+a GitHub release, which is what `install.sh` downloads. `make dist` builds
+the same files locally into `dist/`.

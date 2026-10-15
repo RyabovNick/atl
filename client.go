@@ -95,8 +95,13 @@ func loadConfig() (map[string]map[string]string, error) {
 // envPrefix maps a config section to its variables: jira -> JIRA_URL, JIRA_API_TOKEN, JIRA_USERNAME.
 func envPrefix(name string) string { return strings.ToUpper(name) + "_" }
 
-// settings is a service's config section with its environment variables on top,
-// and the built-in default URL underneath.
+// credentialVars names the variables a user has to set for a service.
+func credentialVars(name string) string {
+	p := envPrefix(name)
+	return p + "URL and " + p + "API_TOKEN"
+}
+
+// settings is a service's config section with its environment variables on top.
 func settings(name string) (map[string]string, error) {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -111,9 +116,6 @@ func settings(name string) (map[string]string, error) {
 		if v := os.Getenv(env); v != "" {
 			s[key] = v
 		}
-	}
-	if s["url"] == "" {
-		s["url"] = defaultURL(name)
 	}
 	return s, nil
 }
