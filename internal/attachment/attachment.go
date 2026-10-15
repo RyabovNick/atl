@@ -1,4 +1,6 @@
-package main
+// Package attachment lists Jira and Confluence attachments and downloads
+// them safely: implements `atl attachment`.
+package attachment
 
 import (
 	"encoding/json"
@@ -12,6 +14,9 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/RyabovNick/atl/internal/atlassian"
+	"github.com/RyabovNick/atl/internal/cli"
 )
 
 const defaultMaxBytes = 50 << 20
@@ -22,14 +27,15 @@ var (
 	confAttIDRE = regexp.MustCompile(`^att\d+$`)
 )
 
-type attachment struct {
-	ID       string `json:"id"`
-	Filename string `json:"filename"`
-	Size     int64  `json:"size"`
-	MimeType string `json:"mimeType"`
-	Author   *named `json:"author"`
-	Created  string `json:"created"`
-	Content  string `json:"content"`
+// Attachment is a Jira attachment, or a Confluence one converted to the same shape.
+type Attachment struct {
+	ID       string           `json:"id"`
+	Filename string           `json:"filename"`
+	Size     int64            `json:"size"`
+	MimeType string           `json:"mimeType"`
+	Author   *atlassian.Named `json:"author"`
+	Created  string           `json:"created"`
+	Content  string           `json:"content"`
 }
 
 type confAttachment struct {
@@ -40,16 +46,16 @@ type confAttachment struct {
 		FileSize  int64  `json:"fileSize"`
 	} `json:"extensions"`
 	Version struct {
-		When string `json:"when"`
-		By   *named `json:"by"`
+		When string           `json:"when"`
+		By   *atlassian.Named `json:"by"`
 	} `json:"version"`
 	Links struct {
 		Download string `json:"download"`
 	} `json:"_links"`
 }
 
-func (a confAttachment) asAttachment() attachment {
-	return attachment{
+func (a confAttachment) asAttachment() Attachment {
+	return Attachment{
 		ID: a.ID, Filename: a.Title, Size: a.Extensions.FileSize, MimeType: a.Extensions.MediaType,
 		Author: a.Version.By, Created: a.Version.When, Content: a.Links.Download,
 	}
@@ -69,15 +75,15 @@ func humanSize(n int64) string {
 	return fmt.Sprintf("%.1f %s", v, unit)
 }
 
-func attachmentLine(a attachment) string {
+func attachmentLine(a Attachment) string {
 	parts := []string{humanSize(a.Size)}
-	for _, p := range []string{a.MimeType, nameOf(a.Author)} {
+	for _, p := range []string{a.MimeType, atlassian.NameOf(a.Author)} {
 		if p != "" {
 			parts = append(parts, p)
 		}
 	}
 	if a.Created != "" {
-		parts = append(parts, shortDate(a.Created))
+		parts = append(parts, atlassian.ShortDate(a.Created))
 	}
 	return fmt.Sprintf("%s — %s · id %s", a.Filename, strings.Join(parts, " · "), a.ID)
 }
@@ -121,7 +127,7 @@ func createUnique(dir, name string) (*os.File, error) {
 			candidate = fmt.Sprintf("%s-%d%s", stem, i, ext)
 		}
 		// name comes from safeFilename, which strips path separators and leading dots.
-		f, err := os.OpenFile(filepath.Join(dir, candidate), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // G703: name is sanitized
+		f, err := os.OpenFile(filepath.Join(dir, candidate), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if errors.Is(err, os.ErrExist) {
 			continue
 		}
@@ -131,8 +137,8 @@ func createUnique(dir, name string) (*os.File, error) {
 }
 
 type download struct {
-	att    attachment
-	source *client
+	att    Attachment
+	source *atlassian.Client
 }
 
 type savedFile struct {
@@ -147,46 +153,48 @@ type savedFile struct {
 func save(d download, dir string, maxBytes int64) (savedFile, error) {
 	a := d.att
 	if a.Size > maxBytes {
-		return savedFile{}, fail(exitAPI, "%s is %s, over the %s limit; raise --max-bytes", a.Filename, humanSize(a.Size), humanSize(maxBytes))
+		return savedFile{}, cli.Fail(cli.ExitAPI, "%s is %s, over the %s limit; raise --max-bytes", a.Filename, humanSize(a.Size), humanSize(maxBytes))
 	}
 	if a.Content == "" {
-		return savedFile{}, fail(exitAPI, "%s has no download link", a.Filename)
+		return savedFile{}, cli.Fail(cli.ExitAPI, "%s has no download link", a.Filename)
 	}
 	f, err := createUnique(dir, safeFilename(a.Filename, "attachment-"+a.ID))
 	if err != nil {
-		return savedFile{}, fail(exitAPI, "%v", err)
+		return savedFile{}, cli.Fail(cli.ExitAPI, "%v", err)
 	}
-	n, err := d.source.download(a.Content, f, maxBytes)
+	n, err := d.source.Download(a.Content, f, maxBytes)
 	if cerr := f.Close(); err == nil && cerr != nil {
-		err = fail(exitAPI, "writing %s: %v", f.Name(), cerr)
+		err = cli.Fail(cli.ExitAPI, "writing %s: %v", f.Name(), cerr)
 	}
 	if err != nil {
 		os.Remove(f.Name())
 		return savedFile{}, err
 	}
 	path, _ := filepath.Abs(f.Name())
-	return savedFile{ID: a.ID, Source: d.source.name, Filename: a.Filename, Path: path, Bytes: n, MimeType: a.MimeType}, nil
+	return savedFile{ID: a.ID, Source: d.source.Name, Filename: a.Filename, Path: path, Bytes: n, MimeType: a.MimeType}, nil
 }
 
-func issueAttachments(jira *client, key string) ([]attachment, error) {
+// ForIssue lists a Jira issue's attachments.
+func ForIssue(jira *atlassian.Client, key string) ([]Attachment, error) {
 	var is struct {
 		Fields struct {
-			Attachment []attachment `json:"attachment"`
+			Attachment []Attachment `json:"attachment"`
 		} `json:"fields"`
 	}
-	_, err := jira.get("/rest/api/2/issue/"+url.PathEscape(key), url.Values{"fields": {"attachment"}}, &is)
+	_, err := jira.Get("/rest/api/2/issue/"+url.PathEscape(key), url.Values{"fields": {"attachment"}}, &is)
 	return is.Fields.Attachment, err
 }
 
-func pageAttachments(conf *client, pageID string) ([]attachment, error) {
+// ForPage lists a Confluence page's attachments.
+func ForPage(conf *atlassian.Client, pageID string) ([]Attachment, error) {
 	var res struct {
 		Results []confAttachment `json:"results"`
 	}
 	params := url.Values{"limit": {"100"}, "expand": {"version"}}
-	if _, err := conf.get("/rest/api/content/"+url.PathEscape(pageID)+"/child/attachment", params, &res); err != nil {
+	if _, err := conf.Get("/rest/api/content/"+url.PathEscape(pageID)+"/child/attachment", params, &res); err != nil {
 		return nil, err
 	}
-	out := make([]attachment, len(res.Results))
+	out := make([]Attachment, len(res.Results))
 	for i, r := range res.Results {
 		out[i] = r.asAttachment()
 	}
@@ -197,18 +205,18 @@ func pageAttachments(conf *client, pageID string) ([]attachment, error) {
 // branch's) means all of its attachments; otherwise each argument is a Jira
 // attachment id or a Confluence one (att<digits>).
 func resolveDownloads(pos []string, stderr io.Writer) ([]download, string, error) {
-	clients := map[string]*client{}
-	clientFor := func(name string) (*client, error) {
+	clients := map[string]*atlassian.Client{}
+	clientFor := func(name string) (*atlassian.Client, error) {
 		if c, ok := clients[name]; ok {
 			return c, nil
 		}
-		c, err := newClient(name)
+		c, err := atlassian.NewClient(name)
 		clients[name] = c
 		return c, err
 	}
 
 	if len(pos) == 0 || (len(pos) == 1 && exactKeyRE.MatchString(strings.ToUpper(pos[0]))) {
-		key, err := keyArg(pos, "attachment", stderr)
+		key, err := cli.KeyArg(pos, "attachment", stderr)
 		if err != nil {
 			return nil, "", err
 		}
@@ -216,7 +224,7 @@ func resolveDownloads(pos []string, stderr io.Writer) ([]download, string, error
 		if err != nil {
 			return nil, "", err
 		}
-		atts, err := issueAttachments(jira, key)
+		atts, err := ForIssue(jira, key)
 		if err != nil {
 			return nil, "", err
 		}
@@ -235,8 +243,8 @@ func resolveDownloads(pos []string, stderr io.Writer) ([]download, string, error
 			if err != nil {
 				return nil, "", err
 			}
-			var a attachment
-			if _, err := jira.get("/rest/api/2/attachment/"+id, nil, &a); err != nil {
+			var a Attachment
+			if _, err := jira.Get("/rest/api/2/attachment/"+id, nil, &a); err != nil {
 				return nil, "", err
 			}
 			ds = append(ds, download{a, jira})
@@ -246,31 +254,32 @@ func resolveDownloads(pos []string, stderr io.Writer) ([]download, string, error
 				return nil, "", err
 			}
 			var a confAttachment
-			if _, err := conf.get("/rest/api/content/"+id, url.Values{"expand": {"version"}}, &a); err != nil {
+			if _, err := conf.Get("/rest/api/content/"+id, url.Values{"expand": {"version"}}, &a); err != nil {
 				return nil, "", err
 			}
 			ds = append(ds, download{a.asAttachment(), conf})
 		default:
-			return nil, "", fail(exitUsage, "%q is neither an issue key, a Jira attachment id nor a Confluence one (att<digits>)", id)
+			return nil, "", cli.Fail(cli.ExitUsage, "%q is neither an issue key, a Jira attachment id nor a Confluence one (att<digits>)", id)
 		}
 	}
 	return ds, pos[0], nil
 }
 
-func cmdAttachment(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("attachment", "[KEY | ID...]",
+// Run implements `atl attachment`.
+func Run(args []string, stdout, stderr io.Writer) error {
+	fs := cli.NewFlags("attachment", "[KEY | ID...]",
 		"Download attachments and print where they were saved.\n"+
 			"KEY downloads all of an issue's attachments and defaults to the current branch's issue;\n"+
 			"IDs are Jira attachment ids (from atl issue) or Confluence ones, att<digits> (from atl page).", stderr)
 	dir := fs.String("dir", "", "save into this directory (default: a new directory under the system temp dir)")
 	maxBytes := fs.Int64("max-bytes", defaultMaxBytes, "refuse any file larger than this")
 	asJSON := fs.Bool("json", false, "print the saved files as JSON")
-	pos, err := parseFlags(fs, args)
+	pos, err := cli.ParseFlags(fs, args)
 	if err != nil {
 		return err
 	}
 	if *maxBytes <= 0 {
-		return fail(exitUsage, "--max-bytes must be positive")
+		return cli.Fail(cli.ExitUsage, "--max-bytes must be positive")
 	}
 	downloads, label, err := resolveDownloads(pos, stderr)
 	if err != nil {
@@ -284,10 +293,10 @@ func cmdAttachment(args []string, stdout, stderr io.Writer) error {
 	target := *dir
 	if target == "" {
 		if target, err = os.MkdirTemp("", "atl-attachments-"+safeFilename(label, "files")+"-"); err != nil {
-			return fail(exitAPI, "%v", err)
+			return cli.Fail(cli.ExitAPI, "%v", err)
 		}
 	} else if err := os.MkdirAll(target, 0o700); err != nil {
-		return fail(exitUsage, "--dir: %v", err)
+		return cli.Fail(cli.ExitUsage, "--dir: %v", err)
 	}
 
 	var saved []savedFile
@@ -308,25 +317,26 @@ func cmdAttachment(args []string, stdout, stderr io.Writer) error {
 		}
 		raw, err := json.Marshal(saved)
 		if err != nil {
-			return fail(exitAPI, "encoding JSON: %v", err)
+			return cli.Fail(cli.ExitAPI, "encoding JSON: %v", err)
 		}
-		if err := writeJSON(stdout, raw); err != nil {
+		if err := cli.WriteJSON(stdout, raw); err != nil {
 			return err
 		}
 	} else if len(saved) > 0 {
 		abs, _ := filepath.Abs(target)
 		fmt.Fprintf(stdout, "Saved %d of %d to %s:\n", len(saved), len(downloads), abs)
 		for _, s := range saved {
-			fmt.Fprintf(stdout, "- %s (%s, %s)\n", s.Path, humanSize(s.Bytes), or(s.MimeType, "unknown type"))
+			fmt.Fprintf(stdout, "- %s (%s, %s)\n", s.Path, humanSize(s.Bytes), cli.Or(s.MimeType, "unknown type"))
 		}
 	}
 	if len(failed) > 0 {
-		return fail(exitAPI, "%d of %d downloads failed: %s", len(failed), len(downloads), strings.Join(failed, ", "))
+		return cli.Fail(cli.ExitAPI, "%d of %d downloads failed: %s", len(failed), len(downloads), strings.Join(failed, ", "))
 	}
 	return nil
 }
 
-func writeAttachments(b *strings.Builder, atts []attachment, hint string) {
+// Write adds an Attachments section listing atts, with hint saying how to download them.
+func Write(b *strings.Builder, atts []Attachment, hint string) {
 	if len(atts) == 0 {
 		return
 	}

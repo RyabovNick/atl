@@ -1,4 +1,4 @@
-package main
+package jira
 
 import (
 	"encoding/json"
@@ -8,6 +8,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/RyabovNick/atl/internal/atlassian"
+	"github.com/RyabovNick/atl/internal/cli"
 )
 
 const searchFields = "summary,status,issuetype,priority,assignee,updated"
@@ -19,19 +22,19 @@ type searchResult struct {
 
 func searchLine(r *issueRef) string {
 	s := issueLine(r)
-	if a := nameOf(r.Fields.Assignee); a != "" {
+	if a := atlassian.NameOf(r.Fields.Assignee); a != "" {
 		s += " · " + a
 	}
 	if r.Fields.Updated != "" {
-		s += " · updated " + shortDate(r.Fields.Updated)
+		s += " · updated " + atlassian.ShortDate(r.Fields.Updated)
 	}
 	return s
 }
 
-func searchIssues(jira *client, jql string, limit int) ([]byte, searchResult, error) {
+func searchIssues(jira *atlassian.Client, jql string, limit int) ([]byte, searchResult, error) {
 	var res searchResult
 	params := url.Values{"jql": {jql}, "maxResults": {strconv.Itoa(limit)}, "fields": {searchFields}}
-	raw, err := jira.get("/rest/api/2/search", params, &res)
+	raw, err := jira.Get("/rest/api/2/search", params, &res)
 	return raw, res, err
 }
 
@@ -41,19 +44,20 @@ func truncationNote(w io.Writer, shown, total int) {
 	}
 }
 
-func cmdJQL(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("jql", "<query>", "Jira issues matching a JQL query. A query Jira rejects exits 2 with its message.", stderr)
+// RunJQL implements `atl jql`.
+func RunJQL(args []string, stdout, stderr io.Writer) error {
+	fs := cli.NewFlags("jql", "<query>", "Jira issues matching a JQL query. A query Jira rejects exits 2 with its message.", stderr)
 	limit := fs.Int("limit", 20, "maximum results")
 	asJSON := fs.Bool("json", false, "print the raw API response")
-	pos, err := parseFlags(fs, args)
+	pos, err := cli.ParseFlags(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) == 0 {
-		return fail(exitUsage, "jql needs a query")
+		return cli.Fail(cli.ExitUsage, "jql needs a query")
 	}
 	jql := strings.Join(pos, " ")
-	jira, err := newClient("jira")
+	jira, err := atlassian.NewClient("jira")
 	if err != nil {
 		return err
 	}
@@ -62,7 +66,7 @@ func cmdJQL(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if *asJSON {
-		return writeJSON(stdout, raw)
+		return cli.WriteJSON(stdout, raw)
 	}
 	if len(res.Issues) == 0 {
 		fmt.Fprintf(stdout, "no issues for: %s\n", jql)
@@ -75,9 +79,9 @@ func cmdJQL(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func epicLinkField(jira *client) (string, error) {
+func epicLinkField(jira *atlassian.Client) (string, error) {
 	var fields []fieldDef
-	if _, err := jira.get("/rest/api/2/field", nil, &fields); err != nil {
+	if _, err := jira.Get("/rest/api/2/field", nil, &fields); err != nil {
 		return "", err
 	}
 	for _, f := range fields {
@@ -95,7 +99,7 @@ type epicCandidate struct {
 	parent   string
 }
 
-func fetchEpicCandidate(jira *client, key, epicField string) (*epicCandidate, error) {
+func fetchEpicCandidate(jira *atlassian.Client, key, epicField string) (*epicCandidate, error) {
 	fields := "summary,status,issuetype,parent"
 	if epicField != "" {
 		fields += "," + epicField
@@ -104,7 +108,7 @@ func fetchEpicCandidate(jira *client, key, epicField string) (*epicCandidate, er
 	var extra struct {
 		Fields map[string]json.RawMessage `json:"fields"`
 	}
-	raw, err := jira.get("/rest/api/2/issue/"+url.PathEscape(key), url.Values{"fields": {fields}}, &c.ref)
+	raw, err := jira.Get("/rest/api/2/issue/"+url.PathEscape(key), url.Values{"fields": {fields}}, &c.ref)
 	if err != nil {
 		return nil, err
 	}
@@ -124,12 +128,12 @@ func fetchEpicCandidate(jira *client, key, epicField string) (*epicCandidate, er
 // resolveEpic walks from an issue to its epic: its Epic Link, or its parent's
 // when it is a subtask. An issue with neither is taken as the epic itself, since
 // localized instances do not call the type "Epic".
-func resolveEpic(jira *client, key, epicField string, stderr io.Writer) (*epicCandidate, error) {
+func resolveEpic(jira *atlassian.Client, key, epicField string, stderr io.Writer) (*epicCandidate, error) {
 	c, err := fetchEpicCandidate(jira, key, epicField)
 	if err != nil {
 		return nil, err
 	}
-	kind := or(nameOf(c.ref.Fields.IssueType), "issue")
+	kind := cli.Or(atlassian.NameOf(c.ref.Fields.IssueType), "issue")
 	switch {
 	case strings.EqualFold(kind, "epic"):
 		return c, nil
@@ -170,19 +174,20 @@ func statusGroup(r *issueRef) string {
 	return "Other"
 }
 
-func cmdEpic(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("epic", "[KEY]", "The issues under an epic, grouped by status.\nKEY defaults to the current branch's issue; a non-epic resolves to its epic or parent.", stderr)
+// RunEpic implements `atl epic`.
+func RunEpic(args []string, stdout, stderr io.Writer) error {
+	fs := cli.NewFlags("epic", "[KEY]", "The issues under an epic, grouped by status.\nKEY defaults to the current branch's issue; a non-epic resolves to its epic or parent.", stderr)
 	limit := fs.Int("limit", 50, "maximum child issues")
 	asJSON := fs.Bool("json", false, "print the raw API responses")
-	pos, err := parseFlags(fs, args)
+	pos, err := cli.ParseFlags(fs, args)
 	if err != nil {
 		return err
 	}
-	key, err := keyArg(pos, "epic", stderr)
+	key, err := cli.KeyArg(pos, "epic", stderr)
 	if err != nil {
 		return err
 	}
-	jira, err := newClient("jira")
+	jira, err := atlassian.NewClient("jira")
 	if err != nil {
 		return err
 	}
@@ -205,9 +210,9 @@ func cmdEpic(args []string, stdout, stderr io.Writer) error {
 	if *asJSON {
 		combined, err := json.Marshal(map[string]json.RawMessage{"epic": epic.raw, "children": raw})
 		if err != nil {
-			return fail(exitAPI, "encoding JSON: %v", err)
+			return cli.Fail(cli.ExitAPI, "encoding JSON: %v", err)
 		}
-		return writeJSON(stdout, combined)
+		return cli.WriteJSON(stdout, combined)
 	}
 
 	groups := map[string][]*issueRef{}
@@ -229,7 +234,7 @@ func cmdEpic(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 	fmt.Fprintf(stdout, "%d issues: %s\n", res.Total, strings.Join(counts, ", "))
-	fmt.Fprintf(stdout, "URL: %s/browse/%s\n", jira.base, epic.ref.Key)
+	fmt.Fprintf(stdout, "URL: %s/browse/%s\n", jira.Base, epic.ref.Key)
 	for _, g := range order {
 		if len(groups[g]) == 0 {
 			continue

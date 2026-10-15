@@ -1,4 +1,5 @@
-package main
+// Package confluence implements the Confluence commands: page and search.
+package confluence
 
 import (
 	"encoding/base64"
@@ -10,6 +11,11 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/RyabovNick/atl/internal/atlassian"
+	"github.com/RyabovNick/atl/internal/attachment"
+	"github.com/RyabovNick/atl/internal/cli"
+	"github.com/RyabovNick/atl/internal/markdown"
 )
 
 var (
@@ -26,9 +32,9 @@ type page struct {
 		Name string `json:"name"`
 	} `json:"space"`
 	Version struct {
-		Number int    `json:"number"`
-		When   string `json:"when"`
-		By     *named `json:"by"`
+		Number int              `json:"number"`
+		When   string           `json:"when"`
+		By     *atlassian.Named `json:"by"`
 	} `json:"version"`
 	Ancestors []struct {
 		Title string `json:"title"`
@@ -57,14 +63,14 @@ func tinyToPageID(code string) (string, error) {
 	return strconv.FormatUint(binary.LittleEndian.Uint64(raw), 10), nil
 }
 
-func pageIDFromRef(conf *client, refStr string) (string, error) {
+func pageIDFromRef(conf *atlassian.Client, refStr string) (string, error) {
 	refStr = strings.TrimSpace(refStr)
 	if _, err := strconv.ParseUint(refStr, 10, 64); err == nil {
 		return refStr, nil
 	}
 	u, err := url.Parse(refStr)
 	if err != nil {
-		return "", fail(exitUsage, "cannot parse %q as a page id or URL", refStr)
+		return "", cli.Fail(cli.ExitUsage, "cannot parse %q as a page id or URL", refStr)
 	}
 	if id := u.Query().Get("pageId"); id != "" {
 		return id, nil
@@ -78,18 +84,18 @@ func pageIDFromRef(conf *client, refStr string) (string, error) {
 	if m := displayPathRE.FindStringSubmatch(u.Path); m != nil {
 		return resolveDisplay(conf, m[1], strings.Split(m[2], "/"))
 	}
-	return "", fail(exitUsage, "cannot find a page id in %q", refStr)
+	return "", cli.Fail(cli.ExitUsage, "cannot find a page id in %q", refStr)
 }
 
 // resolveTiny trusts the decoded id only once the page exists; otherwise it asks
 // Confluence where the link redirects, which works whatever the encoding.
-func resolveTiny(conf *client, code string) (string, error) {
+func resolveTiny(conf *atlassian.Client, code string) (string, error) {
 	if id, err := tinyToPageID(code); err == nil {
-		if _, err := conf.get("/rest/api/content/"+id, nil, nil); err == nil {
+		if _, err := conf.Get("/rest/api/content/"+id, nil, nil); err == nil {
 			return id, nil
 		}
 	}
-	resp, _, err := conf.raw("/x/"+code, nil)
+	resp, _, err := conf.Raw("/x/"+code, nil)
 	if err != nil {
 		return "", err
 	}
@@ -101,13 +107,13 @@ func resolveTiny(conf *client, code string) (string, error) {
 			return m[1], nil
 		}
 	}
-	return "", fail(exitNotFound, "cannot resolve tiny link /x/%s", code)
+	return "", cli.Fail(cli.ExitNotFound, "cannot resolve tiny link /x/%s", code)
 }
 
-func resolveDisplay(conf *client, space string, parts []string) (string, error) {
+func resolveDisplay(conf *atlassian.Client, space string, parts []string) (string, error) {
 	title, err := url.PathUnescape(strings.ReplaceAll(parts[len(parts)-1], "+", " "))
 	if err != nil {
-		return "", fail(exitUsage, "bad page title in URL: %v", err)
+		return "", cli.Fail(cli.ExitUsage, "bad page title in URL: %v", err)
 	}
 	params := url.Values{"spaceKey": {space}, "title": {title}, "type": {"page"}}
 	if len(parts) == 4 && isDigits(parts[0]) && isDigits(parts[1]) && isDigits(parts[2]) {
@@ -117,11 +123,11 @@ func resolveDisplay(conf *client, space string, parts []string) (string, error) 
 	var res struct {
 		Results []page `json:"results"`
 	}
-	if _, err := conf.get("/rest/api/content", params, &res); err != nil {
+	if _, err := conf.Get("/rest/api/content", params, &res); err != nil {
 		return "", err
 	}
 	if len(res.Results) == 0 {
-		return "", fail(exitNotFound, "no page titled %q in space %s", title, space)
+		return "", cli.Fail(cli.ExitNotFound, "no page titled %q in space %s", title, space)
 	}
 	return res.Results[0].ID, nil
 }
@@ -149,7 +155,7 @@ func (c childPage) MarshalJSON() ([]byte, error) {
 
 // childPages lists a page's children depth levels down, at most *budget pages
 // in total; truncated reports that the budget ran out before the tree did.
-func childPages(conf *client, id string, depth int, budget *int) (kids []childPage, truncated bool, err error) {
+func childPages(conf *atlassian.Client, id string, depth int, budget *int) (kids []childPage, truncated bool, err error) {
 	for start := 0; ; {
 		if *budget <= 0 {
 			return kids, true, nil
@@ -162,7 +168,7 @@ func childPages(conf *client, id string, depth int, budget *int) (kids []childPa
 			} `json:"_links"`
 		}
 		params := url.Values{"expand": {"version"}, "limit": {strconv.Itoa(limit)}, "start": {strconv.Itoa(start)}}
-		if _, err := conf.get("/rest/api/content/"+id+"/child/page", params, &res); err != nil {
+		if _, err := conf.Get("/rest/api/content/"+id+"/child/page", params, &res); err != nil {
 			return nil, false, err
 		}
 		for _, r := range res.Results {
@@ -199,13 +205,14 @@ func countPages(ps []childPage) int {
 
 func writeChildren(b *strings.Builder, base string, ps []childPage, indent string) {
 	for _, p := range ps {
-		fmt.Fprintf(b, "%s- %s — id %s · updated %s\n%s  %s%s\n", indent, p.Title, p.ID, shortDate(p.Version.When), indent, base, p.Links.WebUI)
+		fmt.Fprintf(b, "%s- %s — id %s · updated %s\n%s  %s%s\n", indent, p.Title, p.ID, atlassian.ShortDate(p.Version.When), indent, base, p.Links.WebUI)
 		writeChildren(b, base, p.children, indent+"  ")
 	}
 }
 
-func cmdPage(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("page", "<id|url>", `A Confluence page as Markdown. Accepts a page id or any page URL:
+// RunPage implements `atl page`.
+func RunPage(args []string, stdout, stderr io.Writer) error {
+	fs := cli.NewFlags("page", "<id|url>", `A Confluence page as Markdown. Accepts a page id or any page URL:
 viewpage.action?pageId=, /pages/<id>, /display/SPACE/Title, /x/<tiny>.
 
 --toc prints the headings with their sizes instead of the body, and --section
@@ -218,20 +225,20 @@ body; add --toc or --section to get those as well.`, stderr)
 	children := fs.Bool("children", false, "list child pages instead of the body")
 	depth := fs.Int("depth", 1, "levels of child pages to list with --children (1-3)")
 	asJSON := fs.Bool("json", false, "print the raw API response (with --children, the page and its child tree)")
-	pos, err := parseFlags(fs, args)
+	pos, err := cli.ParseFlags(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) != 1 {
-		return fail(exitUsage, "page takes exactly one id or URL")
+		return cli.Fail(cli.ExitUsage, "page takes exactly one id or URL")
 	}
 	if *depth < 1 || *depth > 3 {
-		return fail(exitUsage, "--depth must be 1, 2 or 3")
+		return cli.Fail(cli.ExitUsage, "--depth must be 1, 2 or 3")
 	}
 	if *asJSON && (*toc || len(sections) > 0) {
-		return fail(exitUsage, "--json prints the raw page; it does not combine with --toc or --section")
+		return cli.Fail(cli.ExitUsage, "--json prints the raw page; it does not combine with --toc or --section")
 	}
-	conf, err := newClient("confluence")
+	conf, err := atlassian.NewClient("confluence")
 	if err != nil {
 		return err
 	}
@@ -245,7 +252,7 @@ body; add --toc or --section to get those as well.`, stderr)
 		expand = "body.view," + expand
 	}
 	var p page
-	raw, err := conf.get("/rest/api/content/"+id, url.Values{"expand": {expand}}, &p)
+	raw, err := conf.Get("/rest/api/content/"+id, url.Values{"expand": {expand}}, &p)
 	if err != nil {
 		return err
 	}
@@ -259,22 +266,22 @@ body; add --toc or --section to get those as well.`, stderr)
 	}
 	if *asJSON {
 		if !*children {
-			return writeJSON(stdout, raw)
+			return cli.WriteJSON(stdout, raw)
 		}
 		if kids == nil {
 			kids = []childPage{}
 		}
 		combined, jsonErr := json.Marshal(map[string]any{"page": json.RawMessage(raw), "children": kids, "truncated": truncatedKids})
 		if jsonErr != nil {
-			return fail(exitAPI, "encoding JSON: %v", jsonErr)
+			return cli.Fail(cli.ExitAPI, "encoding JSON: %v", jsonErr)
 		}
-		return writeJSON(stdout, combined)
+		return cli.WriteJSON(stdout, combined)
 	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", p.Title)
-	fmt.Fprintf(&b, "Space: %s (%s) · id %s\n", or(p.Space.Name, "?"), or(p.Space.Key, "?"), p.ID)
-	fmt.Fprintf(&b, "Version %d by %s at %s\n", p.Version.Number, or(nameOf(p.Version.By), "?"), shortDate(p.Version.When))
+	fmt.Fprintf(&b, "Space: %s (%s) · id %s\n", cli.Or(p.Space.Name, "?"), cli.Or(p.Space.Key, "?"), p.ID)
+	fmt.Fprintf(&b, "Version %d by %s at %s\n", p.Version.Number, cli.Or(atlassian.NameOf(p.Version.By), "?"), atlassian.ShortDate(p.Version.When))
 	if len(p.Ancestors) > 0 {
 		titles := make([]string, len(p.Ancestors))
 		for i, a := range p.Ancestors {
@@ -282,29 +289,29 @@ body; add --toc or --section to get those as well.`, stderr)
 		}
 		fmt.Fprintf(&b, "Path: %s\n", strings.Join(titles, " / "))
 	}
-	fmt.Fprintf(&b, "URL: %s%s\n\n", conf.base, p.Links.WebUI)
+	fmt.Fprintf(&b, "URL: %s%s\n\n", conf.Base, p.Links.WebUI)
 
 	if needBody {
-		md, convErr := htmlToMarkdown(p.Body.View.Value)
+		md, convErr := markdown.FromHTML(p.Body.View.Value)
 		if convErr != nil {
-			return fail(exitAPI, "converting page %s to Markdown: %v", id, convErr)
+			return cli.Fail(cli.ExitAPI, "converting page %s to Markdown: %v", id, convErr)
 		}
-		body := demoteHeadings(md, 2)
+		body := markdown.DemoteHeadings(md, 2)
 		lines := strings.Split(body, "\n")
-		hs := scanHeadings(lines)
+		hs := markdown.ScanHeadings(lines)
 		if *toc {
-			writeTOC(&b, lines, hs)
+			markdown.WriteTOC(&b, lines, hs)
 			fmt.Fprintf(&b, "\n(read one with: atl page %s --section \"<heading>\")\n", p.ID)
 		}
 		if len(sections) > 0 {
 			var parts []string
 			for _, q := range sections {
-				found, findErr := findSections(hs, q)
+				found, findErr := markdown.FindSections(hs, q)
 				if findErr != nil {
 					return findErr
 				}
 				for _, h := range found {
-					parts = append(parts, strings.TrimSpace(strings.Join(lines[h.start:h.end], "\n")))
+					parts = append(parts, strings.TrimSpace(strings.Join(lines[h.Start:h.End], "\n")))
 				}
 			}
 			if *toc {
@@ -312,14 +319,14 @@ body; add --toc or --section to get those as well.`, stderr)
 			}
 			fmt.Fprintln(&b, truncateBody(strings.Join(parts, "\n\n"), *maxChars))
 		} else if !*toc {
-			fmt.Fprintln(&b, or(truncateBody(body, *maxChars), "(empty page)"))
+			fmt.Fprintln(&b, cli.Or(truncateBody(body, *maxChars), "(empty page)"))
 		}
 		// Attachments are context; a page whose attachments cannot be listed still prints.
 		if len(sections) == 0 {
-			if atts, attErr := pageAttachments(conf, p.ID); attErr != nil {
+			if atts, attErr := attachment.ForPage(conf, p.ID); attErr != nil {
 				fmt.Fprintf(&b, "\n(attachments unavailable: %v)\n", attErr)
 			} else {
-				writeAttachments(&b, atts, "atl attachment <id>")
+				attachment.Write(&b, atts, "atl attachment <id>")
 			}
 		}
 	}
@@ -332,7 +339,7 @@ body; add --toc or --section to get those as well.`, stderr)
 		if len(kids) == 0 {
 			b.WriteString("(none)\n")
 		}
-		writeChildren(&b, conf.base, kids, "")
+		writeChildren(&b, conf.Base, kids, "")
 		if truncatedKids {
 			fmt.Fprintf(&b, "\n(stopped at %d pages; list a child page's children instead)\n", maxChildPages)
 		}
@@ -348,56 +355,9 @@ func truncateBody(body string, maxChars int) string {
 	return body
 }
 
-func cqlString(s string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
-}
+// stringsFlag collects a repeatable string flag.
+type stringsFlag []string
 
-func cmdSearch(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("search", "<text>", "Search Confluence pages and blog posts.", stderr)
-	space := fs.String("space", "", "limit to one space key")
-	rawCQL := fs.Bool("cql", false, "treat <text> as a raw CQL query")
-	limit := fs.Int("limit", 10, "maximum results")
-	asJSON := fs.Bool("json", false, "print the raw API response")
-	pos, err := parseFlags(fs, args)
-	if err != nil {
-		return err
-	}
-	if len(pos) == 0 {
-		return fail(exitUsage, "search needs text to look for")
-	}
-	text := strings.Join(pos, " ")
-	cql := text
-	if !*rawCQL {
-		cql = "text ~ " + cqlString(text) + " AND type in (page, blogpost)"
-		if *space != "" {
-			cql += " AND space = " + cqlString(*space)
-		}
-	}
-	conf, err := newClient("confluence")
-	if err != nil {
-		return err
-	}
-	var res struct {
-		Results []page `json:"results"`
-		Size    int    `json:"size"`
-	}
-	params := url.Values{"cql": {cql}, "limit": {strconv.Itoa(*limit)}, "expand": {"space,version"}}
-	raw, err := conf.get("/rest/api/content/search", params, &res)
-	if err != nil {
-		return err
-	}
-	if *asJSON {
-		return writeJSON(stdout, raw)
-	}
-	if len(res.Results) == 0 {
-		fmt.Fprintf(stdout, "no results for: %s\n", cql)
-		return nil
-	}
-	for _, r := range res.Results {
-		fmt.Fprintf(stdout, "- %s — %s · updated %s · id %s\n  %s%s\n", r.Title, or(r.Space.Key, "?"), shortDate(r.Version.When), r.ID, conf.base, r.Links.WebUI)
-	}
-	if res.Size >= *limit {
-		fmt.Fprintf(stdout, "(first %d; raise --limit or narrow the query)\n", *limit)
-	}
-	return nil
-}
+func (s *stringsFlag) String() string { return strings.Join(*s, ", ") }
+
+func (s *stringsFlag) Set(v string) error { *s = append(*s, v); return nil }

@@ -1,4 +1,4 @@
-package main
+package install
 
 import (
 	"errors"
@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"golang.org/x/term"
+
+	"github.com/RyabovNick/atl/internal/cli"
 )
 
 // agent is a coding agent atl can set up: it gets the atlassian skill and a
@@ -27,7 +29,7 @@ type agent struct {
 func homeDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fail(exitConfig, "cannot find the home directory: %v", err)
+		return "", cli.Fail(cli.ExitConfig, "cannot find the home directory: %v", err)
 	}
 	return home, nil
 }
@@ -114,10 +116,10 @@ func parseAgents(list string) ([]agent, error) {
 		}
 	}
 	for id := range want {
-		return nil, fail(exitUsage, "unknown agent %q; choose from %s, or all", id, agentIDs())
+		return nil, cli.Fail(cli.ExitUsage, "unknown agent %q; choose from %s, or all", id, agentIDs())
 	}
 	if len(out) == 0 {
-		return nil, fail(exitUsage, "--agents is empty; choose from %s, or all", agentIDs())
+		return nil, cli.Fail(cli.ExitUsage, "--agents is empty; choose from %s, or all", agentIDs())
 	}
 	return out, nil
 }
@@ -178,7 +180,7 @@ func chooseAgents() ([]agent, error) {
 			}
 		}
 		if len(picked) == 0 {
-			return nil, fail(exitUsage, "no coding agent found; pass --agents with %s, or all", agentIDs())
+			return nil, cli.Fail(cli.ExitUsage, "no coding agent found; pass --agents with %s, or all", agentIDs())
 		}
 		return picked, nil
 	}
@@ -186,16 +188,16 @@ func chooseAgents() ([]agent, error) {
 
 	state, err := term.MakeRaw(int(in.Fd()))
 	if err != nil {
-		return nil, fail(exitAPI, "cannot read the terminal: %v", err)
+		return nil, cli.Fail(cli.ExitAPI, "cannot read the terminal: %v", err)
 	}
 	selected, err = selectLoop(in, out, selected)
 	_ = term.Restore(int(in.Fd()), state)
 	fmt.Fprintln(out)
 	if errors.Is(err, errCanceled) {
-		return nil, fail(exitUsage, "install canceled")
+		return nil, cli.Fail(cli.ExitUsage, "install canceled")
 	}
 	if err != nil {
-		return nil, fail(exitAPI, "reading the terminal: %v", err)
+		return nil, cli.Fail(cli.ExitAPI, "reading the terminal: %v", err)
 	}
 	var picked []agent
 	for i, a := range agents {

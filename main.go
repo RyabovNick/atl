@@ -1,13 +1,16 @@
-// Command atl reads Jira and Confluence Data Center (REST API v2) for coding agents.
-// It has no write verbs on purpose.
 package main
 
 import (
-	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/RyabovNick/atl/internal/attachment"
+	"github.com/RyabovNick/atl/internal/cli"
+	"github.com/RyabovNick/atl/internal/confluence"
+	"github.com/RyabovNick/atl/internal/doctor"
+	"github.com/RyabovNick/atl/internal/install"
+	"github.com/RyabovNick/atl/internal/jira"
 )
 
 const usage = `atl: read-only Jira and Confluence lookups
@@ -39,51 +42,22 @@ Credentials: JIRA_URL, JIRA_API_TOKEN, CONFLUENCE_URL, CONFLUENCE_API_TOKEN
 Exit codes: 0 ok, 1 API or network, 2 usage or rejected query, 3 config, 4 not found.
 `
 
-func newFlags(name, args, help string, stderr io.Writer) *flag.FlagSet {
-	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() {
-		fmt.Fprintf(stderr, "usage: atl %s %s\n\n%s\n\n", name, args, help)
-		fs.PrintDefaults()
-	}
-	return fs
-}
-
-// parseFlags allows flags after positional arguments, as in `atl issue KEY --comments`.
-func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
-	var pos []string
-	for {
-		if err := fs.Parse(args); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				return nil, &atlError{code: 0}
-			}
-			return nil, &atlError{msg: err.Error(), code: exitUsage}
-		}
-		args = fs.Args()
-		if len(args) == 0 {
-			return pos, nil
-		}
-		pos = append(pos, args[0])
-		args = args[1:]
-	}
-}
-
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
-		return exitUsage
+		return cli.ExitUsage
 	}
 	commands := map[string]func([]string, io.Writer, io.Writer) error{
-		"issue":      cmdIssue,
-		"jql":        cmdJQL,
-		"epic":       cmdEpic,
-		"history":    cmdHistory,
-		"page":       cmdPage,
-		"attachment": cmdAttachment,
-		"search":     cmdSearch,
-		"doctor":     cmdDoctor,
-		"install":    cmdInstall,
-		"uninstall":  cmdUninstall,
+		"issue":      jira.RunIssue,
+		"jql":        jira.RunJQL,
+		"epic":       jira.RunEpic,
+		"history":    jira.RunHistory,
+		"page":       confluence.RunPage,
+		"attachment": attachment.Run,
+		"search":     confluence.RunSearch,
+		"doctor":     doctor.Run,
+		"install":    install.Run,
+		"uninstall":  install.RunUninstall,
 	}
 	cmd, ok := commands[args[0]]
 	if !ok {
@@ -92,23 +66,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprint(stdout, usage)
 			return 0
 		case "version", "--version":
-			fmt.Fprintf(stdout, "atl %s\n", version)
+			fmt.Fprintf(stdout, "atl %s\n", cli.Version)
 			return 0
 		}
 		fmt.Fprintf(stderr, "atl: unknown command %q\n\n%s", args[0], usage)
-		return exitUsage
+		return cli.ExitUsage
 	}
-	if err := cmd(args[1:], stdout, stderr); err != nil {
-		if ae, ok := errors.AsType[*atlError](err); ok {
-			if ae.msg != "" {
-				fmt.Fprintf(stderr, "atl: %s\n", ae.msg)
-			}
-			return ae.code
-		}
-		fmt.Fprintf(stderr, "atl: %v\n", err)
-		return exitAPI
-	}
-	return 0
+	return cli.Report(cmd(args[1:], stdout, stderr), stderr)
 }
 
 func main() {

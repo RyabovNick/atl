@@ -1,4 +1,4 @@
-package main
+package install
 
 import (
 	"errors"
@@ -8,23 +8,37 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/RyabovNick/atl/internal/cli"
+	"github.com/RyabovNick/atl/internal/testenv"
+	"github.com/RyabovNick/atl/skill"
 )
+
+func runAtl(t *testing.T, args ...string) (string, string, int) {
+	t.Helper()
+	return testenv.Run(t, map[string]testenv.Command{
+		"install":   Run,
+		"uninstall": RunUninstall,
+	}, args...)
+}
 
 type installFixture struct {
 	home, oc, claude, codex, bin, src string
 }
 
 func (f installFixture) agents() string { return filepath.Join(f.oc, "AGENTS.md") }
+
 func (f installFixture) skill() string {
 	return filepath.Join(f.home, ".agents", "skills", "atlassian", "SKILL.md")
 }
+
 func (f installFixture) claudeSkill() string {
 	return filepath.Join(f.claude, "skills", "atlassian", "SKILL.md")
 }
 
 func newInstallFixture(t *testing.T) installFixture {
 	t.Helper()
-	clearEnv(t)
+	testenv.ClearEnv(t)
 	home := t.TempDir()
 	f := installFixture{
 		home: home, oc: filepath.Join(home, "oc"), claude: filepath.Join(home, "claude"), codex: filepath.Join(home, "codex"),
@@ -66,7 +80,7 @@ func readFile(t *testing.T, path string) string {
 }
 
 func expectedBlock(nl string) string {
-	body := strings.TrimRight(agentsSection, "\n")
+	body := strings.TrimRight(skill.Instructions, "\n")
 	return agentsBegin + nl + strings.ReplaceAll(body, "\n", nl) + nl + agentsEnd
 }
 
@@ -76,7 +90,7 @@ func TestInstallFreshAndIdempotent(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s\n%s", code, errs, out)
 	}
-	mustContain(t, out,
+	testenv.MustContain(t, out,
 		"Installed atl dev:",
 		"binary       "+filepath.Join(f.bin, "atl")+" (created)",
 		"skill        "+f.skill()+" (created)",
@@ -93,7 +107,7 @@ func TestInstallFreshAndIdempotent(t *testing.T) {
 	if info, _ := os.Stat(filepath.Join(f.bin, "atl")); info.Mode().Perm() != 0o755 {
 		t.Errorf("binary mode = %v", info.Mode().Perm())
 	}
-	if readFile(t, f.skill()) != string(skillMD) {
+	if readFile(t, f.skill()) != string(skill.Skill) {
 		t.Error("skill differs from the embedded copy")
 	}
 	if got, want := readFile(t, f.agents()), expectedBlock("\n")+"\n"; got != want {
@@ -119,7 +133,7 @@ func TestInstallFreshAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, _, _ = runAtl(t, "install", "--bin-dir", f.bin)
-	mustContain(t, out, "binary       "+filepath.Join(f.bin, "atl")+" (updated)")
+	testenv.MustContain(t, out, "binary       "+filepath.Join(f.bin, "atl")+" (updated)")
 }
 
 func TestInstallPreservesAgentsContent(t *testing.T) {
@@ -142,11 +156,11 @@ func TestInstallPreservesAgentsContent(t *testing.T) {
 		t.Errorf("existing file mode not kept: %v", info.Mode().Perm())
 	}
 
-	old := agentsSection
-	agentsSection = "## Changed\n\nNew text.\n"
-	t.Cleanup(func() { agentsSection = old })
+	old := skill.Instructions
+	skill.Instructions = "## Changed\n\nNew text.\n"
+	t.Cleanup(func() { skill.Instructions = old })
 	out, _, _ := runAtl(t, "install", "--no-binary")
-	mustContain(t, out, "opencode     "+f.agents()+" (updated)")
+	testenv.MustContain(t, out, "opencode     "+f.agents()+" (updated)")
 	got = readFile(t, f.agents())
 	if !strings.HasPrefix(got, mine) || strings.Count(got, agentsBegin) != 1 || !strings.Contains(got, "New text.") || strings.Contains(got, "Jira and Confluence") {
 		t.Errorf("block not replaced in place:\n%s", got)
@@ -156,7 +170,7 @@ func TestInstallPreservesAgentsContent(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("uninstall: exit %d: %s", code, errs)
 	}
-	mustContain(t, out, "opencode     "+f.agents()+" (section removed)", "binary       kept (--keep-binary)")
+	testenv.MustContain(t, out, "opencode     "+f.agents()+" (section removed)", "binary       kept (--keep-binary)")
 	if got := readFile(t, f.agents()); got != mine {
 		t.Errorf("uninstall left %q, want %q", got, mine)
 	}
@@ -170,12 +184,12 @@ func TestUpsertBlockLineEndings(t *testing.T) {
 		{"crlf without trailing newline", "a\r\nb", "a\r\nb\r\n\r\n" + expectedBlock("\r\n") + "\r\n"},
 		{"block in the middle", "a\n\n" + agentsBegin + "\nold\n" + agentsEnd + "\n\nb\n", "a\n\n" + expectedBlock("\n") + "\n\nb\n"},
 	} {
-		got, err := upsertBlock(tc.doc, agentsSection, false)
+		got, err := upsertBlock(tc.doc, skill.Instructions, false)
 		if err != nil || got != tc.want {
 			t.Errorf("%s: got %q, %v; want %q", tc.name, got, err, tc.want)
 			continue
 		}
-		if again, _ := upsertBlock(got, agentsSection, false); again != got {
+		if again, _ := upsertBlock(got, skill.Instructions, false); again != got {
 			t.Errorf("%s: not idempotent: %q", tc.name, again)
 		}
 		if strings.Contains(tc.doc, "\r\n") && strings.Count(got, "\n") != strings.Count(got, "\r\n") {
@@ -206,10 +220,10 @@ func TestInstallMalformedMarkers(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, errs, code := runAtl(t, "install", "--no-binary")
-		if code != exitConfig || !strings.Contains(errs, "--force") || readFile(t, f.agents()) != tc.doc {
+		if code != cli.ExitConfig || !strings.Contains(errs, "--force") || readFile(t, f.agents()) != tc.doc {
 			t.Errorf("%s: exit %d, %s", tc.name, code, errs)
 		}
-		if _, errs, code := runAtl(t, "uninstall", "--keep-binary"); code != exitConfig || !strings.Contains(errs, "by hand") {
+		if _, errs, code := runAtl(t, "uninstall", "--keep-binary"); code != cli.ExitConfig || !strings.Contains(errs, "by hand") {
 			t.Errorf("%s: uninstall exit %d, %s", tc.name, code, errs)
 		}
 		if _, errs, code := runAtl(t, "install", "--no-binary", "--force"); code != 0 {
@@ -227,7 +241,7 @@ func TestInstallSkipsAndSameFile(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errs)
 	}
-	mustContain(t, out, "binary       skipped (--no-binary)", "opencode     instructions skipped (--no-instructions)", "(created)")
+	testenv.MustContain(t, out, "binary       skipped (--no-binary)", "opencode     instructions skipped (--no-instructions)", "(created)")
 	if strings.Contains(out, "not on PATH") {
 		t.Errorf("PATH warning without a binary:\n%s", out)
 	}
@@ -248,16 +262,16 @@ func TestInstallSkipsAndSameFile(t *testing.T) {
 	}
 	executable = func() (string, error) { return link, nil }
 	out, _, _ = runAtl(t, "install", "--bin-dir", f.bin, "--no-instructions")
-	mustContain(t, out, "binary       "+installed+" (unchanged)")
+	testenv.MustContain(t, out, "binary       "+installed+" (unchanged)")
 
 	executable = func() (string, error) { return "", errors.New("no /proc") }
-	if _, errs, code := runAtl(t, "install", "--bin-dir", f.bin); code != exitAPI || !strings.Contains(errs, "cannot find the running binary") {
+	if _, errs, code := runAtl(t, "install", "--bin-dir", f.bin); code != cli.ExitAPI || !strings.Contains(errs, "cannot find the running binary") {
 		t.Errorf("missing executable: exit %d, %s", code, errs)
 	}
-	if _, _, code := runAtl(t, "install", "extra"); code != exitUsage {
+	if _, _, code := runAtl(t, "install", "extra"); code != cli.ExitUsage {
 		t.Errorf("install with an argument: exit %d", code)
 	}
-	if _, _, code := runAtl(t, "uninstall", "extra"); code != exitUsage {
+	if _, _, code := runAtl(t, "uninstall", "extra"); code != cli.ExitUsage {
 		t.Errorf("uninstall with an argument: exit %d", code)
 	}
 }
@@ -271,7 +285,7 @@ func TestUninstall(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errs)
 	}
-	mustContain(t, out,
+	testenv.MustContain(t, out,
 		"skill        "+filepath.Dir(f.skill())+" (removed)",
 		"opencode     "+f.agents()+" (removed (it held only the atl section))",
 		"binary       "+filepath.Join(f.bin, "atl")+" (removed)",
@@ -319,48 +333,13 @@ func TestOpencodeAndBinDirs(t *testing.T) {
 	}
 }
 
-func TestVersion(t *testing.T) {
-	old := version
-	version = "v1.2.3"
-	t.Cleanup(func() { version = old })
-	for _, arg := range []string{"version", "--version"} {
-		if out, _, code := runAtl(t, arg); code != 0 || out != "atl v1.2.3\n" {
-			t.Errorf("%s: exit %d, %q", arg, code, out)
-		}
-	}
-}
-
-func TestSettingsPrecedence(t *testing.T) {
-	srv := fakeServer(t)
-	clearEnv(t)
-	t.Setenv("ATL_CONFIG", filepath.Join(t.TempDir(), "absent.ini"))
-
-	// The environment beats the config file.
-	writeConfig(t, fmt.Sprintf("[jira]\nurl = %s/jira\n", srv.URL), 0o600)
-	t.Setenv("JIRA_API_TOKEN", token)
-	out, _, code := runAtl(t, "doctor")
-	if code != 0 {
-		t.Errorf("doctor: exit %d\n%s", code, out)
-	}
-	mustContain(t, out, "url        "+srv.URL+"/jira (config file)", "✓ jira", "- confluence: not configured")
-	t.Setenv("JIRA_URL", "http://127.0.0.1:1/env")
-	out, _, _ = runAtl(t, "doctor")
-	mustContain(t, out, "url        http://127.0.0.1:1/env (JIRA_URL)", "✗ jira")
-
-	t.Setenv("JIRA_URL", "")
-	writeConfig(t, "[jira]\ntoken = t\n", 0o600)
-	if _, errs, code := runAtl(t, "issue", "PROJ-1"); code != exitConfig || !strings.Contains(errs, "jira needs a URL: set JIRA_URL") {
-		t.Errorf("URL missing: exit %d, %s", code, errs)
-	}
-}
-
 func TestInstallAgents(t *testing.T) {
 	f := newInstallFixture(t)
 	legacy := filepath.Join(f.oc, "skills", "atlassian", "SKILL.md")
 	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(legacy, skillMD, 0o644); err != nil {
+	if err := os.WriteFile(legacy, skill.Skill, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -369,7 +348,7 @@ func TestInstallAgents(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, errs)
 	}
 	claudeMD, codexMD := filepath.Join(f.claude, "CLAUDE.md"), filepath.Join(f.codex, "AGENTS.md")
-	mustContain(t, out,
+	testenv.MustContain(t, out,
 		"skill        "+f.claudeSkill()+" (created)",
 		"skill        "+f.skill()+" (created)",
 		"old skill    "+filepath.Dir(legacy)+" (removed)",
@@ -383,7 +362,7 @@ func TestInstallAgents(t *testing.T) {
 		t.Errorf("shared skill listed %d times\n%s", n, out)
 	}
 	for _, p := range []string{f.claudeSkill(), f.skill()} {
-		if readFile(t, p) != string(skillMD) {
+		if readFile(t, p) != string(skill.Skill) {
 			t.Errorf("%s differs from the embedded skill", p)
 		}
 	}
@@ -412,7 +391,7 @@ func TestInstallAgents(t *testing.T) {
 		t.Errorf("--agents claude: exit %d\n%s", code, out)
 	}
 	for _, bad := range []string{"cursor", ","} {
-		if _, errs, code := runAtl(t, "install", "--no-binary", "--agents", bad); code != exitUsage || !strings.Contains(errs, "claude,codex,opencode") {
+		if _, errs, code := runAtl(t, "install", "--no-binary", "--agents", bad); code != cli.ExitUsage || !strings.Contains(errs, "claude,codex,opencode") {
 			t.Errorf("--agents %q: exit %d, %s", bad, code, errs)
 		}
 	}
@@ -433,7 +412,7 @@ func TestInstallDetectsAgents(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, errs, code := runAtl(t, "install", "--no-binary"); code != exitUsage || !strings.Contains(errs, "no coding agent found") {
+	if _, errs, code := runAtl(t, "install", "--no-binary"); code != cli.ExitUsage || !strings.Contains(errs, "no coding agent found") {
 		t.Errorf("nothing detected: exit %d, %s", code, errs)
 	}
 }
@@ -472,5 +451,5 @@ func TestSelectLoop(t *testing.T) {
 	}
 	var out strings.Builder
 	selectLoop(keys("j", " ", "\r", "j", " ", "\r"), &out, []bool{false, true, false})
-	mustContain(t, out.String(), "Select at least one agent", "> [x] opencode", "[ ] Claude Code")
+	testenv.MustContain(t, out.String(), "Select at least one agent", "> [x] opencode", "[ ] Claude Code")
 }

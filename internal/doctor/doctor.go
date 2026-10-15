@@ -1,4 +1,6 @@
-package main
+// Package doctor implements `atl doctor`: where each setting comes from, and
+// whether Jira and Confluence accept the configured tokens.
+package doctor
 
 import (
 	"encoding/json"
@@ -8,6 +10,9 @@ import (
 	"io/fs"
 	"os"
 	"strings"
+
+	"github.com/RyabovNick/atl/internal/atlassian"
+	"github.com/RyabovNick/atl/internal/cli"
 )
 
 type setting struct {
@@ -50,7 +55,7 @@ type serviceReport struct {
 }
 
 func inspectConfigFile() (fileStatus, map[string]map[string]string) {
-	st := fileStatus{Path: configPath()}
+	st := fileStatus{Path: atlassian.ConfigPath()}
 	info, err := os.Stat(st.Path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return st, nil
@@ -59,7 +64,7 @@ func inspectConfigFile() (fileStatus, map[string]map[string]string) {
 	if err == nil {
 		st.Mode = fmt.Sprintf("%o", info.Mode().Perm())
 	}
-	cfg, err := loadConfig()
+	cfg, err := atlassian.LoadConfig()
 	if err != nil {
 		st.Error = err.Error()
 		return st, nil
@@ -70,7 +75,7 @@ func inspectConfigFile() (fileStatus, map[string]map[string]string) {
 // describeSettings reports each effective value and where it came from. The
 // token's value is never included, only whether it is set.
 func describeSettings(name string, file map[string]string) []setting {
-	p := envPrefix(name)
+	p := atlassian.EnvPrefix(name)
 	envs := map[string]string{"url": p + "URL", "token": p + "API_TOKEN", "username": p + "USERNAME"}
 	out := make([]setting, 0, 6)
 	for _, key := range []string{"url", "token", "username", "auth", "ca_bundle", "timeout"} {
@@ -100,41 +105,41 @@ func describeSettings(name string, file map[string]string) []setting {
 	return out
 }
 
-func checkJira(c *client, r *serviceReport) {
+func checkJira(c *atlassian.Client, r *serviceReport) {
 	var me struct {
 		Name         string `json:"name"`
 		Key          string `json:"key"`
 		DisplayName  string `json:"displayName"`
 		EmailAddress string `json:"emailAddress"`
 	}
-	if _, err := c.get("/rest/api/2/myself", nil, &me); err != nil {
+	if _, err := c.Get("/rest/api/2/myself", nil, &me); err != nil {
 		r.Error = err.Error()
 		return
 	}
 	r.OK = true
-	r.User = &doctorUser{DisplayName: me.DisplayName, Name: or(me.Name, me.Key), Email: me.EmailAddress}
+	r.User = &doctorUser{DisplayName: me.DisplayName, Name: cli.Or(me.Name, me.Key), Email: me.EmailAddress}
 
 	var info doctorServer
-	if _, err := c.get("/rest/api/2/serverInfo", nil, &info); err != nil {
+	if _, err := c.Get("/rest/api/2/serverInfo", nil, &info); err != nil {
 		r.Warnings = append(r.Warnings, "server info unavailable: "+err.Error())
 		return
 	}
 	r.Server = &info
-	if info.BaseURL != "" && !strings.EqualFold(strings.TrimRight(info.BaseURL, "/"), c.base) {
+	if info.BaseURL != "" && !strings.EqualFold(strings.TrimRight(info.BaseURL, "/"), c.Base) {
 		r.Warnings = append(r.Warnings, fmt.Sprintf(
 			"Jira's base URL is %s but atl is configured with %s; links and attachment downloads are matched against the configured URL",
-			info.BaseURL, c.base))
+			info.BaseURL, c.Base))
 	}
 }
 
-func checkConfluence(c *client, r *serviceReport) {
+func checkConfluence(c *atlassian.Client, r *serviceReport) {
 	var u struct {
 		Type        string `json:"type"`
 		Username    string `json:"username"`
 		UserKey     string `json:"userKey"`
 		DisplayName string `json:"displayName"`
 	}
-	if _, err := c.get("/rest/api/user/current", nil, &u); err != nil {
+	if _, err := c.Get("/rest/api/user/current", nil, &u); err != nil {
 		r.Error = err.Error()
 		return
 	}
@@ -144,7 +149,7 @@ func checkConfluence(c *client, r *serviceReport) {
 		return
 	}
 	r.OK = true
-	r.User = &doctorUser{DisplayName: u.DisplayName, Name: or(u.Username, u.UserKey)}
+	r.User = &doctorUser{DisplayName: u.DisplayName, Name: cli.Or(u.Username, u.UserKey)}
 }
 
 func diagnose(name string, file map[string]string, fileErr string) serviceReport {
@@ -161,7 +166,7 @@ func diagnose(name string, file map[string]string, fileErr string) serviceReport
 	if !r.Configured {
 		return r
 	}
-	c, err := newClient(name)
+	c, err := atlassian.NewClient(name)
 	if err != nil {
 		r.Error = err.Error()
 		return r
@@ -178,7 +183,7 @@ func diagnose(name string, file map[string]string, fileErr string) serviceReport
 func (r serviceReport) summary() string {
 	switch {
 	case r.OK:
-		who := or(r.User.DisplayName, r.User.Name)
+		who := cli.Or(r.User.DisplayName, r.User.Name)
 		var ids []string
 		if r.User.Name != "" && r.User.Name != who {
 			ids = append(ids, r.User.Name)
@@ -201,15 +206,16 @@ func (r serviceReport) summary() string {
 	}
 }
 
-func cmdDoctor(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("doctor", "", "Check atl's configuration and that each configured service accepts its token.\nTokens are never printed.", stderr)
+// Run implements `atl doctor`.
+func Run(args []string, stdout, stderr io.Writer) error {
+	fs := cli.NewFlags("doctor", "", "Check atl's configuration and that each configured service accepts its token.\nTokens are never printed.", stderr)
 	asJSON := fs.Bool("json", false, "print the report as JSON")
-	pos, err := parseFlags(fs, args)
+	pos, err := cli.ParseFlags(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) > 0 {
-		return fail(exitUsage, "doctor takes no arguments")
+		return cli.Fail(cli.ExitUsage, "doctor takes no arguments")
 	}
 
 	file, cfg := inspectConfigFile()
@@ -226,24 +232,24 @@ func cmdDoctor(args []string, stdout, stderr io.Writer) error {
 	code := 0
 	switch {
 	case !reached:
-		code = exitConfig
+		code = cli.ExitConfig
 	case failed:
-		code = exitAPI
+		code = cli.ExitAPI
 	}
 
 	if *asJSON {
 		data, err := json.Marshal(map[string]any{"config_file": file, "services": reports, "exit": code})
 		if err != nil {
-			return fail(exitAPI, "encoding JSON: %v", err)
+			return cli.Fail(cli.ExitAPI, "encoding JSON: %v", err)
 		}
-		if err := writeJSON(stdout, data); err != nil {
+		if err := cli.WriteJSON(stdout, data); err != nil {
 			return err
 		}
 	} else if err := writeDoctor(stdout, file, reports, code); err != nil {
 		return err
 	}
 	if code != 0 {
-		return &atlError{code: code}
+		return &cli.Error{Code: code}
 	}
 	return nil
 }
@@ -261,7 +267,7 @@ func writeDoctor(w io.Writer, file fileStatus, reports []serviceReport, code int
 	for _, r := range reports {
 		fmt.Fprintf(&b, "\n%s\n", r.Name)
 		for _, s := range r.Settings {
-			value := or(s.Value, "-")
+			value := cli.Or(s.Value, "-")
 			if s.Source == "unset" {
 				fmt.Fprintf(&b, "  %-10s %s\n", s.Key, "unset")
 				continue
@@ -273,9 +279,9 @@ func writeDoctor(w io.Writer, file fileStatus, reports []serviceReport, code int
 			fmt.Fprintf(&b, "  ! %s\n", warn)
 		}
 	}
-	if code == exitConfig && file.Error == "" && !reports[0].Configured && !reports[1].Configured {
+	if code == cli.ExitConfig && file.Error == "" && !reports[0].Configured && !reports[1].Configured {
 		fmt.Fprintf(&b, "\nNothing is configured: set %s and/or %s, or create %s.\n",
-			credentialVars("jira"), credentialVars("confluence"), file.Path)
+			atlassian.CredentialVars("jira"), atlassian.CredentialVars("confluence"), file.Path)
 	}
 	_, err := io.WriteString(w, b.String())
 	return err

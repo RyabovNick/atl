@@ -1,4 +1,4 @@
-package main
+package jira
 
 import (
 	"fmt"
@@ -9,6 +9,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/RyabovNick/atl/internal/atlassian"
+	"github.com/RyabovNick/atl/internal/cli"
 )
 
 const (
@@ -32,9 +35,9 @@ type changeItem struct {
 }
 
 type change struct {
-	Author  *named       `json:"author"`
-	Created string       `json:"created"`
-	Items   []changeItem `json:"items"`
+	Author  *atlassian.Named `json:"author"`
+	Created string           `json:"created"`
+	Items   []changeItem     `json:"items"`
 	when    time.Time
 }
 
@@ -64,7 +67,7 @@ func parseSince(s string, ref time.Time) (time.Time, error) {
 	if d, err := time.ParseDuration(s); err == nil && d >= 0 {
 		return ref.Add(-d), nil
 	}
-	return time.Time{}, fail(exitUsage, "--since takes a date (2026-10-01) or a duration (7d, 2w, 48h), not %q", s)
+	return time.Time{}, cli.Fail(cli.ExitUsage, "--since takes a date (2026-10-01) or a duration (7d, 2w, 48h), not %q", s)
 }
 
 // fieldNames resolves changelog field labels: DC names system fields by id
@@ -179,18 +182,19 @@ func changeLines(it changeItem, names fieldNames) []string {
 	if isLongText(it.FromString) || isLongText(it.ToString) {
 		return longChange(name, it.FromString, it.ToString)
 	}
-	return []string{fmt.Sprintf("- %s: %s → %s", name, or(it.FromString, "(none)"), or(it.ToString, "(none)"))}
+	return []string{fmt.Sprintf("- %s: %s → %s", name, cli.Or(it.FromString, "(none)"), cli.Or(it.ToString, "(none)"))}
 }
 
-func cmdHistory(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("history", "[KEY]", "Who changed what on a Jira issue, oldest first. Long text edits are summarized as a line diff.\nKEY defaults to the issue key in the current git branch.", stderr)
+// RunHistory implements `atl history`.
+func RunHistory(args []string, stdout, stderr io.Writer) error {
+	fs := cli.NewFlags("history", "[KEY]", "Who changed what on a Jira issue, oldest first. Long text edits are summarized as a line diff.\nKEY defaults to the issue key in the current git branch.", stderr)
 	since := fs.String("since", "", "only changes on or after a date (2026-10-01) or within a duration (7d, 2w, 48h)")
 	asJSON := fs.Bool("json", false, "print the raw API response")
-	pos, err := parseFlags(fs, args)
+	pos, err := cli.ParseFlags(fs, args)
 	if err != nil {
 		return err
 	}
-	key, err := keyArg(pos, "history", stderr)
+	key, err := cli.KeyArg(pos, "history", stderr)
 	if err != nil {
 		return err
 	}
@@ -201,21 +205,21 @@ func cmdHistory(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 
-	jira, err := newClient("jira")
+	jira, err := atlassian.NewClient("jira")
 	if err != nil {
 		return err
 	}
 	var defs []fieldDef
-	if _, err = jira.get("/rest/api/2/field", nil, &defs); err != nil {
+	if _, err = jira.Get("/rest/api/2/field", nil, &defs); err != nil {
 		return err
 	}
 	var is historyIssue
-	raw, err := jira.get("/rest/api/2/issue/"+url.PathEscape(key), url.Values{"fields": {"summary,status"}, "expand": {"changelog"}}, &is)
+	raw, err := jira.Get("/rest/api/2/issue/"+url.PathEscape(key), url.Values{"fields": {"summary,status"}, "expand": {"changelog"}}, &is)
 	if err != nil {
 		return err
 	}
 	if *asJSON {
-		return writeJSON(stdout, raw)
+		return cli.WriteJSON(stdout, raw)
 	}
 
 	all := is.Changelog.Histories
@@ -240,7 +244,7 @@ func cmdHistory(args []string, stdout, stderr io.Writer) error {
 			lines = append(lines, changeLines(it, names)...)
 		}
 		if len(lines) > 0 {
-			blocks = append(blocks, block{fmt.Sprintf("%s %s", shortDate(c.Created), or(nameOf(c.Author), "?")), lines})
+			blocks = append(blocks, block{fmt.Sprintf("%s %s", atlassian.ShortDate(c.Created), cli.Or(atlassian.NameOf(c.Author), "?")), lines})
 		}
 	}
 
@@ -259,7 +263,7 @@ func cmdHistory(args []string, stdout, stderr io.Writer) error {
 	if total := is.Changelog.Total; total > len(all) {
 		line("(partial: Jira returned %d of %d changes)", len(all), total)
 	}
-	line("URL: %s/browse/%s", jira.base, is.Key)
+	line("URL: %s/browse/%s", jira.Base, is.Key)
 	line("\n## History")
 	if len(blocks) == 0 {
 		line("\n(no changes%s)", scope)

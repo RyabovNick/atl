@@ -1,8 +1,9 @@
-package main
+// Package install sets atl up for coding agents (Claude Code, Codex,
+// opencode): the binary, the skill and a short instructions section.
+package install
 
 import (
 	"bytes"
-	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -12,13 +13,11 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+
+	"github.com/RyabovNick/atl/internal/atlassian"
+	"github.com/RyabovNick/atl/internal/cli"
+	"github.com/RyabovNick/atl/skill"
 )
-
-//go:embed skill/atlassian/SKILL.md
-var skillMD []byte
-
-//go:embed skill/agents-section.md
-var agentsSection string
 
 const (
 	agentsBegin = "<!-- atl:begin -->"
@@ -47,7 +46,7 @@ func defaultBinDir() (string, error) {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fail(exitConfig, "cannot find the home directory: %v", err)
+		return "", cli.Fail(cli.ExitConfig, "cannot find the home directory: %v", err)
 	}
 	return filepath.Join(home, ".local", "bin"), nil
 }
@@ -219,9 +218,9 @@ func installInstructions(path string, force bool) (string, error) {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return "", err
 	}
-	doc, err := upsertBlock(string(old), agentsSection, force)
+	doc, err := upsertBlock(string(old), skill.Instructions, force)
 	if err != nil {
-		return "", fail(exitConfig, "%s: %v; fix it by hand or rerun with --force", path, err)
+		return "", cli.Fail(cli.ExitConfig, "%s: %v; fix it by hand or rerun with --force", path, err)
 	}
 	return writeIfChanged(path, []byte(doc), 0o644, false)
 }
@@ -280,8 +279,9 @@ func writeSteps(w io.Writer, title string, steps []step) {
 	}
 }
 
-func cmdInstall(args []string, stdout, stderr io.Writer) error {
-	fl := newFlags("install", "", "Install atl for coding agents: copy this binary to --bin-dir, write the atlassian\n"+
+// Run implements `atl install`.
+func Run(args []string, stdout, stderr io.Writer) error {
+	fl := cli.NewFlags("install", "", "Install atl for coding agents: copy this binary to --bin-dir, write the atlassian\n"+
 		"skill, and add a short section to each agent's global instructions file. Safe to rerun.\n"+
 		"Without --agents it asks, starting from the agents found on this machine.", stderr)
 	binDefault, err := defaultBinDir()
@@ -293,12 +293,12 @@ func cmdInstall(args []string, stdout, stderr io.Writer) error {
 	noBinary := fl.Bool("no-binary", false, "do not copy the binary")
 	noInstructions := fl.Bool("no-instructions", false, "do not touch CLAUDE.md or AGENTS.md")
 	force := fl.Bool("force", false, "replace a damaged atl section in an instructions file: from the first atl marker to the last end marker, or to the end of the file")
-	pos, err := parseFlags(fl, args)
+	pos, err := cli.ParseFlags(fl, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) > 0 {
-		return fail(exitUsage, "install takes no arguments")
+		return cli.Fail(cli.ExitUsage, "install takes no arguments")
 	}
 	var chosen []agent
 	if *agentList != "" {
@@ -316,7 +316,7 @@ func cmdInstall(args []string, stdout, stderr io.Writer) error {
 	} else {
 		path, status, binErr := installBinary(*binDir)
 		if binErr != nil {
-			return fail(exitAPI, "installing the binary to %s: %v", path, binErr)
+			return cli.Fail(cli.ExitAPI, "installing the binary to %s: %v", path, binErr)
 		}
 		steps = append(steps, step{"binary", path, status})
 	}
@@ -332,9 +332,9 @@ func cmdInstall(args []string, stdout, stderr io.Writer) error {
 			continue
 		}
 		written[path] = true
-		status, err := writeIfChanged(path, skillMD, 0o644, false)
+		status, err := writeIfChanged(path, skill.Skill, 0o644, false)
 		if err != nil {
-			return fail(exitAPI, "writing the skill: %v", err)
+			return cli.Fail(cli.ExitAPI, "writing the skill: %v", err)
 		}
 		steps = append(steps, step{"skill", path, status})
 	}
@@ -359,15 +359,15 @@ func cmdInstall(args []string, stdout, stderr io.Writer) error {
 		}
 		status, err := installInstructions(path, *force)
 		if err != nil {
-			if _, ok := errors.AsType[*atlError](err); ok {
+			if _, ok := errors.AsType[*cli.Error](err); ok {
 				return err
 			}
-			return fail(exitAPI, "writing %s: %v", path, err)
+			return cli.Fail(cli.ExitAPI, "writing %s: %v", path, err)
 		}
 		steps = append(steps, step{a.name, path, status})
 	}
 
-	writeSteps(stdout, "Installed atl "+version+":", steps)
+	writeSteps(stdout, "Installed atl "+cli.Version+":", steps)
 	if !*noBinary && !onPath(*binDir) {
 		fmt.Fprintf(stdout, "\n! %s is not on PATH; %s\n", *binDir, pathHint(*binDir))
 	}
@@ -379,12 +379,13 @@ Next steps:
      sent as Bearer: leave CONFLUENCE_USERNAME unset. Tokens from API-token apps may be rejected.
   2. Run: atl doctor
   3. Restart %s to load the skill.
-`, credentialVars("jira"), credentialVars("confluence"), configPath(), agentNames(chosen))
+`, atlassian.CredentialVars("jira"), atlassian.CredentialVars("confluence"), atlassian.ConfigPath(), agentNames(chosen))
 	return nil
 }
 
-func cmdUninstall(args []string, stdout, stderr io.Writer) error {
-	fl := newFlags("uninstall", "", "Remove what `atl install` added for every agent: the binary in --bin-dir, the\n"+
+// RunUninstall implements `atl uninstall`.
+func RunUninstall(args []string, stdout, stderr io.Writer) error {
+	fl := cli.NewFlags("uninstall", "", "Remove what `atl install` added for every agent: the binary in --bin-dir, the\n"+
 		"atlassian skill, and the atl section of each instructions file. The config file is left alone.", stderr)
 	binDefault, err := defaultBinDir()
 	if err != nil {
@@ -392,12 +393,12 @@ func cmdUninstall(args []string, stdout, stderr io.Writer) error {
 	}
 	binDir := fl.String("bin-dir", binDefault, "where the binary was installed")
 	keepBinary := fl.Bool("keep-binary", false, "leave the binary in place")
-	pos, err := parseFlags(fl, args)
+	pos, err := cli.ParseFlags(fl, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) > 0 {
-		return fail(exitUsage, "uninstall takes no arguments")
+		return cli.Fail(cli.ExitUsage, "uninstall takes no arguments")
 	}
 
 	var steps []step
@@ -444,12 +445,12 @@ func cmdUninstall(args []string, stdout, stderr io.Writer) error {
 		bin := filepath.Join(*binDir, binaryName())
 		status := removePath(bin)
 		if strings.HasPrefix(status, "error") {
-			return fail(exitAPI, "removing %s: %s", bin, status)
+			return cli.Fail(cli.ExitAPI, "removing %s: %s", bin, status)
 		}
 		steps = append(steps, step{"binary", bin, status})
 	}
 	writeSteps(stdout, "Uninstalled atl:", steps)
-	fmt.Fprintf(stdout, "\nLeft in place: %s, and any JIRA_*/CONFLUENCE_* variables. Restart your agents.\n", configPath())
+	fmt.Fprintf(stdout, "\nLeft in place: %s, and any JIRA_*/CONFLUENCE_* variables. Restart your agents.\n", atlassian.ConfigPath())
 	return nil
 }
 
@@ -469,23 +470,23 @@ func uninstallInstructions(path string) (string, error) {
 		return "absent", nil
 	}
 	if err != nil {
-		return "", fail(exitAPI, "reading %s: %v", path, err)
+		return "", cli.Fail(cli.ExitAPI, "reading %s: %v", path, err)
 	}
 	doc, changed, err := removeBlock(string(old))
 	if err != nil {
-		return "", fail(exitConfig, "%s: %v; remove the atl section by hand", path, err)
+		return "", cli.Fail(cli.ExitConfig, "%s: %v; remove the atl section by hand", path, err)
 	}
 	if !changed {
 		return "no atl section", nil
 	}
 	if strings.TrimSpace(doc) == "" {
 		if err := os.Remove(path); err != nil {
-			return "", fail(exitAPI, "removing %s: %v", path, err)
+			return "", cli.Fail(cli.ExitAPI, "removing %s: %v", path, err)
 		}
 		return "removed (it held only the atl section)", nil
 	}
 	if _, err := writeIfChanged(path, []byte(doc), 0o644, false); err != nil {
-		return "", fail(exitAPI, "writing %s: %v", path, err)
+		return "", cli.Fail(cli.ExitAPI, "writing %s: %v", path, err)
 	}
 	return "section removed", nil
 }

@@ -1,28 +1,24 @@
-package main
+// Package jira implements the Jira commands: issue, jql, epic and history.
+package jira
 
 import (
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
-	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/RyabovNick/atl/internal/atlassian"
+	"github.com/RyabovNick/atl/internal/attachment"
+	"github.com/RyabovNick/atl/internal/cli"
+	"github.com/RyabovNick/atl/internal/markdown"
 )
+
+var urlRE = regexp.MustCompile(`https?://[^\s|\[\]<>"'{}]+`)
 
 const confluenceApp = "com.atlassian.confluence"
-
-var (
-	keyRE      = regexp.MustCompile(`[A-Z][A-Z0-9]+-\d+`)
-	looseKeyRE = regexp.MustCompile(`[A-Za-z][A-Za-z0-9]+-\d+`)
-	urlRE      = regexp.MustCompile(`https?://[^\s|\[\]<>"'{}]+`)
-)
-
-type named struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"displayName"`
-}
 
 type status struct {
 	Name           string `json:"name"`
@@ -34,11 +30,11 @@ type status struct {
 type issueRef struct {
 	Key    string `json:"key"`
 	Fields struct {
-		Summary   string  `json:"summary"`
-		Status    *status `json:"status"`
-		IssueType *named  `json:"issuetype"`
-		Assignee  *named  `json:"assignee"`
-		Updated   string  `json:"updated"`
+		Summary   string           `json:"summary"`
+		Status    *status          `json:"status"`
+		IssueType *atlassian.Named `json:"issuetype"`
+		Assignee  *atlassian.Named `json:"assignee"`
+		Updated   string           `json:"updated"`
 	} `json:"fields"`
 }
 
@@ -53,32 +49,32 @@ type issueLink struct {
 }
 
 type comment struct {
-	ID      string `json:"id"`
-	Author  *named `json:"author"`
-	Created string `json:"created"`
-	Body    string `json:"body"`
+	ID      string           `json:"id"`
+	Author  *atlassian.Named `json:"author"`
+	Created string           `json:"created"`
+	Body    string           `json:"body"`
 }
 
 type issue struct {
 	Key    string `json:"key"`
 	Fields struct {
-		Summary     string       `json:"summary"`
-		Description string       `json:"description"`
-		Created     string       `json:"created"`
-		Updated     string       `json:"updated"`
-		Status      *status      `json:"status"`
-		IssueType   *named       `json:"issuetype"`
-		Priority    *named       `json:"priority"`
-		Resolution  *named       `json:"resolution"`
-		Assignee    *named       `json:"assignee"`
-		Reporter    *named       `json:"reporter"`
-		Labels      []string     `json:"labels"`
-		Components  []named      `json:"components"`
-		FixVersions []named      `json:"fixVersions"`
-		IssueLinks  []issueLink  `json:"issuelinks"`
-		Subtasks    []issueRef   `json:"subtasks"`
-		Parent      *issueRef    `json:"parent"`
-		Attachment  []attachment `json:"attachment"`
+		Summary     string                  `json:"summary"`
+		Description string                  `json:"description"`
+		Created     string                  `json:"created"`
+		Updated     string                  `json:"updated"`
+		Status      *status                 `json:"status"`
+		IssueType   *atlassian.Named        `json:"issuetype"`
+		Priority    *atlassian.Named        `json:"priority"`
+		Resolution  *atlassian.Named        `json:"resolution"`
+		Assignee    *atlassian.Named        `json:"assignee"`
+		Reporter    *atlassian.Named        `json:"reporter"`
+		Labels      []string                `json:"labels"`
+		Components  []atlassian.Named       `json:"components"`
+		FixVersions []atlassian.Named       `json:"fixVersions"`
+		IssueLinks  []issueLink             `json:"issuelinks"`
+		Subtasks    []issueRef              `json:"subtasks"`
+		Parent      *issueRef               `json:"parent"`
+		Attachment  []attachment.Attachment `json:"attachment"`
 		Comment     struct {
 			Comments []comment `json:"comments"`
 		} `json:"comment"`
@@ -97,55 +93,6 @@ type remoteLink struct {
 
 type ref struct{ title, url, where string }
 
-func nameOf(n *named) string {
-	if n == nil {
-		return ""
-	}
-	if n.DisplayName != "" {
-		return n.DisplayName
-	}
-	return n.Name
-}
-
-func keyFromBranchName(branch string) (string, bool) {
-	if m := keyRE.FindString(branch); m != "" {
-		return m, true
-	}
-	if m := looseKeyRE.FindString(branch); m != "" {
-		return strings.ToUpper(m), true
-	}
-	return "", false
-}
-
-func keyFromBranch(stderr io.Writer) (string, error) {
-	out, err := exec.Command("git", "branch", "--show-current").Output()
-	if err != nil {
-		return "", fail(exitUsage, "no issue key given and not inside a git repository")
-	}
-	branch := strings.TrimSpace(string(out))
-	key, ok := keyFromBranchName(branch)
-	if !ok {
-		if branch == "" {
-			branch = "(detached HEAD)"
-		}
-		return "", fail(exitUsage, "no issue key in branch %q; pass one explicitly", branch)
-	}
-	fmt.Fprintf(stderr, "atl: %s from branch %s\n", key, branch)
-	return key, nil
-}
-
-// keyArg takes an explicit issue key or falls back to the current branch's.
-func keyArg(pos []string, cmd string, stderr io.Writer) (string, error) {
-	switch len(pos) {
-	case 0:
-		return keyFromBranch(stderr)
-	case 1:
-		return strings.ToUpper(pos[0]), nil
-	default:
-		return "", fail(exitUsage, "%s takes at most one key", cmd)
-	}
-}
-
 func (l issueLink) relation() (string, *issueRef) {
 	if l.OutwardIssue != nil {
 		return l.Type.Outward, l.OutwardIssue
@@ -158,7 +105,7 @@ func issueLine(r *issueRef) string {
 	if r.Fields.Status != nil {
 		st = r.Fields.Status.Name
 	}
-	if t := nameOf(r.Fields.IssueType); t != "" {
+	if t := atlassian.NameOf(r.Fields.IssueType); t != "" {
 		tail = " (" + t + ")"
 	}
 	return fmt.Sprintf("%s [%s] %s%s", r.Key, st, r.Fields.Summary, tail)
@@ -201,25 +148,26 @@ func confluenceRefs(is *issue, links []remoteLink, confBase string) (pages, othe
 	return pages, others
 }
 
-func cmdIssue(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("issue", "[KEY]", "A Jira issue with its links, subtasks and Confluence references.\nKEY defaults to the issue key in the current git branch.", stderr)
+// RunIssue implements `atl issue`.
+func RunIssue(args []string, stdout, stderr io.Writer) error {
+	fs := cli.NewFlags("issue", "[KEY]", "A Jira issue with its links, subtasks and Confluence references.\nKEY defaults to the issue key in the current git branch.", stderr)
 	comments := fs.Bool("comments", false, "include comment bodies")
 	asJSON := fs.Bool("json", false, "print the raw API responses")
-	pos, err := parseFlags(fs, args)
+	pos, err := cli.ParseFlags(fs, args)
 	if err != nil {
 		return err
 	}
-	key, err := keyArg(pos, "issue", stderr)
+	key, err := cli.KeyArg(pos, "issue", stderr)
 	if err != nil {
 		return err
 	}
 
-	jira, err := newClient("jira")
+	jira, err := atlassian.NewClient("jira")
 	if err != nil {
 		return err
 	}
 	var allFields []fieldDef
-	if _, err = jira.get("/rest/api/2/field", nil, &allFields); err != nil {
+	if _, err = jira.Get("/rest/api/2/field", nil, &allFields); err != nil {
 		return err
 	}
 	epicField := ""
@@ -232,7 +180,7 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 	var is issue
 	path := "/rest/api/2/issue/" + url.PathEscape(key)
 	// Custom field ids can number in the hundreds, too many to list in a URL.
-	rawIssue, err := jira.get(path, url.Values{"fields": {"*all"}, "expand": {"renderedFields"}}, &is)
+	rawIssue, err := jira.Get(path, url.Values{"fields": {"*all"}, "expand": {"renderedFields"}}, &is)
 	if err != nil {
 		return err
 	}
@@ -241,10 +189,10 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 		RenderedFields map[string]json.RawMessage `json:"renderedFields"`
 	}
 	if err = json.Unmarshal(rawIssue, &extra); err != nil {
-		return fail(exitAPI, "jira: decoding %s: %v", path, err)
+		return cli.Fail(cli.ExitAPI, "jira: decoding %s: %v", path, err)
 	}
 	var links []remoteLink
-	rawLinks, linkErr := jira.get(path+"/remotelink", nil, &links)
+	rawLinks, linkErr := jira.Get(path+"/remotelink", nil, &links)
 
 	if *asJSON {
 		if linkErr != nil {
@@ -252,9 +200,9 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 		}
 		combined, jsonErr := json.Marshal(map[string]json.RawMessage{"issue": rawIssue, "remotelinks": rawLinks})
 		if jsonErr != nil {
-			return fail(exitAPI, "encoding JSON: %v", jsonErr)
+			return cli.Fail(cli.ExitAPI, "encoding JSON: %v", jsonErr)
 		}
-		return writeJSON(stdout, combined)
+		return cli.WriteJSON(stdout, combined)
 	}
 
 	f := is.Fields
@@ -263,26 +211,26 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 
 	line("# %s: %s\n", is.Key, f.Summary)
 	var head []string
-	if t := nameOf(f.IssueType); t != "" {
+	if t := atlassian.NameOf(f.IssueType); t != "" {
 		head = append(head, "Type: "+t)
 	}
 	if f.Status != nil {
 		head = append(head, "Status: "+f.Status.Name)
 	}
-	if p := nameOf(f.Priority); p != "" {
+	if p := atlassian.NameOf(f.Priority); p != "" {
 		head = append(head, "Priority: "+p)
 	}
-	resolution := nameOf(f.Resolution)
+	resolution := atlassian.NameOf(f.Resolution)
 	if resolution == "" {
 		resolution = "Unresolved"
 	}
 	line("%s", strings.Join(append(head, "Resolution: "+resolution), " · "))
-	assignee := nameOf(f.Assignee)
+	assignee := atlassian.NameOf(f.Assignee)
 	if assignee == "" {
 		assignee = "Unassigned"
 	}
-	line("Assignee: %s · Reporter: %s", assignee, or(nameOf(f.Reporter), "?"))
-	line("Created: %s · Updated: %s", shortDate(f.Created), shortDate(f.Updated))
+	line("Assignee: %s · Reporter: %s", assignee, cli.Or(atlassian.NameOf(f.Reporter), "?"))
+	line("Created: %s · Updated: %s", atlassian.ShortDate(f.Created), atlassian.ShortDate(f.Updated))
 	if f.Parent != nil {
 		line("Parent: %s", issueLine(f.Parent))
 	}
@@ -291,7 +239,7 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 		if json.Unmarshal(extra.Fields[epicField], &epic) == nil && epic != "" {
 			var e issueRef
 			// The epic's summary is context, not essential: show the bare key if it cannot be read.
-			if _, epicErr := jira.get("/rest/api/2/issue/"+url.PathEscape(epic), url.Values{"fields": {"summary,status,issuetype"}}, &e); epicErr == nil {
+			if _, epicErr := jira.Get("/rest/api/2/issue/"+url.PathEscape(epic), url.Values{"fields": {"summary,status,issuetype"}}, &e); epicErr == nil {
 				epic = issueLine(&e)
 			}
 			line("Epic: %s", epic)
@@ -305,7 +253,7 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 	listLine("Labels", f.Labels)
 	listLine("Components", names(f.Components))
 	listLine("Fix versions", names(f.FixVersions))
-	line("URL: %s/browse/%s", jira.base, is.Key)
+	line("URL: %s/browse/%s", jira.Base, is.Key)
 
 	type rel struct {
 		name  string
@@ -335,10 +283,10 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 	}
 
 	line("\n## Description\n")
-	line("%s", or(demoteHeadings(richText(extra.RenderedFields["description"], f.Description), 3), "(empty)"))
+	line("%s", cli.Or(markdown.DemoteHeadings(richText(extra.RenderedFields["description"], f.Description), 3), "(empty)"))
 	for _, fv := range longFields {
 		line("\n## %s\n", fv.name)
-		line("%s", demoteHeadings(fv.value, 3))
+		line("%s", markdown.DemoteHeadings(fv.value, 3))
 	}
 
 	if len(rels) > 0 {
@@ -361,9 +309,9 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 
-	writeAttachments(&b, f.Attachment, "atl attachment "+is.Key+" for all, or atl attachment <id>")
+	attachment.Write(&b, f.Attachment, "atl attachment "+is.Key+" for all, or atl attachment <id>")
 
-	pages, others := confluenceRefs(&is, links, optionalBaseURL("confluence"))
+	pages, others := confluenceRefs(&is, links, atlassian.OptionalBaseURL("confluence"))
 	writeRefs := func(heading string, refs []ref) {
 		if len(refs) == 0 {
 			return
@@ -402,8 +350,8 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 		}
 		line("\n## Comments (%d)", len(cs))
 		for _, c := range cs {
-			line("\n### %s — %s\n", or(nameOf(c.Author), "?"), shortDate(c.Created))
-			line("%s", demoteHeadings(richText(renderedBody[c.ID], c.Body), 4))
+			line("\n### %s — %s\n", cli.Or(atlassian.NameOf(c.Author), "?"), atlassian.ShortDate(c.Created))
+			line("%s", markdown.DemoteHeadings(richText(renderedBody[c.ID], c.Body), 4))
 		}
 	case len(cs) > 0:
 		line("\n(%d comments; add --comments to read them)", len(cs))
@@ -413,17 +361,10 @@ func cmdIssue(args []string, stdout, stderr io.Writer) error {
 	return err
 }
 
-func names(ns []named) []string {
+func names(ns []atlassian.Named) []string {
 	out := make([]string, 0, len(ns))
 	for _, n := range ns {
 		out = append(out, n.Name)
 	}
 	return out
-}
-
-func or(s, fallback string) string {
-	if s == "" {
-		return fallback
-	}
-	return s
 }
