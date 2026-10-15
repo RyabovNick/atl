@@ -129,7 +129,7 @@ func TestDoctorConfigProblems(t *testing.T) {
 	if code != exitAPI {
 		t.Errorf("half-configured jira: exit %d", code)
 	}
-	mustContain(t, out, "✗ jira: jira needs a URL and token", "token      unset", "✓ confluence")
+	mustContain(t, out, "✗ jira: jira needs a token: set JIRA_API_TOKEN", "token      unset", "✓ confluence")
 
 	if _, _, code := runAtl(t, "doctor", "extra"); code != exitUsage {
 		t.Errorf("doctor with an argument: exit %d", code)

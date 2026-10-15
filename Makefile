@@ -1,15 +1,37 @@
 BIN ?= $(HOME)/.local/bin
-SKILLS ?= $(HOME)/.config/opencode/skills
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
-.PHONY: build test install
+# defaults.go is the primary place for the built-in URLs; these only override it.
+LDFLAGS := -s -w -X main.version=$(VERSION)
+ifneq ($(JIRA_DEFAULT_URL),)
+LDFLAGS += -X main.defaultJiraURL=$(JIRA_DEFAULT_URL)
+endif
+ifneq ($(CONFLUENCE_DEFAULT_URL),)
+LDFLAGS += -X main.defaultConfluenceURL=$(CONFLUENCE_DEFAULT_URL)
+endif
+
+.PHONY: build test install uninstall dist
 
 build:
-	go build -o atl .
+	go build -trimpath -ldflags '$(LDFLAGS)' -o atl .
 
 test:
 	go vet ./...
 	go test ./...
 
-install: test
-	go build -o $(BIN)/atl .
-	install -D -m 644 skill/atlassian/SKILL.md $(SKILLS)/atlassian/SKILL.md
+install: test build
+	./atl install --bin-dir '$(BIN)'
+
+uninstall: build
+	./atl uninstall --bin-dir '$(BIN)'
+
+dist:
+	rm -rf dist
+	mkdir -p dist
+	for p in $(PLATFORMS); do \
+		os=$${p%/*}; arch=$${p#*/}; ext=; [ "$$os" = windows ] && ext=.exe; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags '$(LDFLAGS)' \
+			-o dist/atl-$$os-$$arch$$ext . || exit 1; \
+	done
+	cd dist && if command -v sha256sum >/dev/null; then sha256sum atl-*; else shasum -a 256 atl-*; fi > SHA256SUMS

@@ -26,10 +26,16 @@ const usage = `atl: read-only Jira and Confluence lookups
                                               Confluence pages and blog posts
   atl doctor [--json]                         where each setting comes from, and
                                               whether each service accepts its token
+  atl install [--bin-dir DIR] [--no-binary] [--no-agents] [--force]
+                                              copy the binary, write the opencode skill
+                                              and the AGENTS.md section; safe to rerun
+  atl uninstall [--bin-dir DIR] [--keep-binary]
+  atl version
 
 KEY defaults to the issue key in the current git branch.
 Credentials: JIRA_URL, JIRA_API_TOKEN, CONFLUENCE_URL, CONFLUENCE_API_TOKEN
-(plus *_USERNAME for basic auth), over $ATL_CONFIG or ~/.config/atl/config.ini.
+(plus *_USERNAME for basic auth), over $ATL_CONFIG or ~/.config/atl/config.ini,
+over built-in default URLs when this build has them.
 Exit codes: 0 ok, 1 API or network, 2 usage or rejected query, 3 config, 4 not found.
 `
 
@@ -76,11 +82,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		"attachment": cmdAttachment,
 		"search":     cmdSearch,
 		"doctor":     cmdDoctor,
+		"install":    cmdInstall,
+		"uninstall":  cmdUninstall,
 	}
 	cmd, ok := commands[args[0]]
 	if !ok {
-		if args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+		switch args[0] {
+		case "-h", "--help", "help":
 			fmt.Fprint(stdout, usage)
+			return 0
+		case "version", "--version":
+			fmt.Fprintf(stdout, "atl %s\n", version)
 			return 0
 		}
 		fmt.Fprintf(stderr, "atl: unknown command %q\n\n%s", args[0], usage)

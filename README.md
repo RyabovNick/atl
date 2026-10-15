@@ -3,19 +3,49 @@
 Read-only Jira and Confluence Data Center (REST API v2) lookups for coding
 agents, plus the opencode skill that tells an agent when to use them.
 
+## Install
+
+Each way ends in `atl install`. It copies the binary to `~/.local/bin`
+(`--bin-dir` to change), writes the `atlassian` skill to
+`~/.config/opencode/skills/`, and adds a short section to
+`~/.config/opencode/AGENTS.md` telling agents to check the branch for an issue
+key. That section sits between `<!-- atl:begin -->` and `<!-- atl:end -->`.
+Rerunning updates it in place and leaves the rest of the file alone.
+
+- **Linux or macOS, no Go:** download [install.sh](install.sh) from the
+  repository and run it. A private project needs `GITLAB_TOKEN`, a personal
+  access token with `read_api`. `ATL_VERSION` picks a release instead of the
+  latest, and other arguments go to `atl install`.
+
+  ```bash
+  GITLAB_TOKEN=... sh install.sh
+  ```
+- **A release binary, any system:** download `atl-<os>-<arch>` from the
+  project's Releases page, check it against `SHA256SUMS`, and run
+  `./atl-<os>-<arch> install`. On Windows, download `atl-windows-amd64.exe`,
+  rename it to `atl.exe` and run `atl.exe install`; it installs to
+  `%LOCALAPPDATA%\Programs\atl`.
+- **From source:** `make install` (needs Go) runs the tests, builds, and
+  runs `./atl install`.
+
+Then set the tokens, check them, and restart opencode:
+
 ```bash
-make install          # vet, test, build to ~/.local/bin/atl, install the skill
-export JIRA_URL=https://jira.example.com JIRA_API_TOKEN=...
-export CONFLUENCE_URL=https://confluence.example.com CONFLUENCE_API_TOKEN=...
+export JIRA_API_TOKEN=... CONFLUENCE_API_TOKEN=...
+# and JIRA_URL / CONFLUENCE_URL unless this build has built-in defaults;
 # or: install -m 600 config.example.ini ~/.config/atl/config.ini and edit it
 atl doctor            # where each setting comes from; does each service accept its token
 ```
 
+`atl uninstall` (or `make uninstall`) removes the binary, the skill and the
+AGENTS.md section, and leaves the config file in place. `atl version` prints
+the build's version.
+
 ## Commands
 
 `KEY` defaults to the issue key in the current git branch
-(`feature/PROJ-123-x` → `PROJ-123`). Every command takes `--json`: the raw API
-response, or for `attachment` and `doctor` their own report.
+(`feature/PROJ-123-x` → `PROJ-123`). Every command below takes `--json`: the
+raw API response, or for `attachment` and `doctor` their own report.
 
 | Command | Returns |
 | --- | --- |
@@ -58,11 +88,14 @@ config file is unusable).
 ## Configuration and auth
 
 `JIRA_URL`, `JIRA_API_TOKEN`, `JIRA_USERNAME` and their `CONFLUENCE_*`
-equivalents override `$ATL_CONFIG` or `~/.config/atl/config.ini`, which is
-optional when they supply the URL and token; see
+equivalents override `$ATL_CONFIG` or `~/.config/atl/config.ini`, which
+overrides the URLs built into the binary. The file is optional when the
+environment supplies the URL and token; see
 [config.example.ini](config.example.ini) for the other settings (`auth`,
 `ca_bundle`, `timeout`). Tokens are sent as `Authorization: Bearer`; a
-username switches to basic auth.
+username switches to basic auth. For Confluence use a native personal access
+token (avatar → Settings → Personal Access Tokens) with no username; tokens
+issued by API-token apps can be rejected even when Jira accepts its own.
 
 Data Center rarely says "wrong token" plainly: Jira redirects to its login
 page, and Confluence answers as an anonymous user, so a restricted page looks
@@ -85,3 +118,20 @@ page, and Confluence answers as an anonymous user, so a restricted page looks
 
 `go test ./...` runs against a fake Jira and Confluence; no instance or token
 is needed. `go test -cover ./...` reports coverage.
+
+## For maintainers
+
+1. Fill in `defaultJiraURL` and `defaultConfluenceURL` in
+   [defaults.go](defaults.go), so colleagues only need tokens. CI/CD variables
+   `JIRA_DEFAULT_URL` and `CONFLUENCE_DEFAULT_URL` override them without a
+   commit.
+2. Fill in `ATL_GITLAB_URL` and `ATL_PROJECT` at the top of
+   [install.sh](install.sh).
+3. Tag `vX.Y.Z` and push the tag. [.gitlab-ci.yml](.gitlab-ci.yml) tests every
+   branch, merge request and tag. On a version tag it runs `make dist`, which
+   builds Linux, macOS and Windows binaries for amd64 and arm64 plus
+   `SHA256SUMS`. It uploads them to the project's Generic Package Registry
+   (`atl/X.Y.Z`) and creates a release linking them, which is what
+   `install.sh` downloads.
+
+`make dist` builds the same files locally into `dist/`.

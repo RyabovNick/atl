@@ -95,7 +95,8 @@ func loadConfig() (map[string]map[string]string, error) {
 // envPrefix maps a config section to its variables: jira -> JIRA_URL, JIRA_API_TOKEN, JIRA_USERNAME.
 func envPrefix(name string) string { return strings.ToUpper(name) + "_" }
 
-// settings is a service's config section with its environment variables on top.
+// settings is a service's config section with its environment variables on top,
+// and the built-in default URL underneath.
 func settings(name string) (map[string]string, error) {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -110,6 +111,9 @@ func settings(name string) (map[string]string, error) {
 		if v := os.Getenv(env); v != "" {
 			s[key] = v
 		}
+	}
+	if s["url"] == "" {
+		s["url"] = defaultURL(name)
 	}
 	return s, nil
 }
@@ -137,10 +141,15 @@ func newClient(name string) (*client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if s["url"] == "" || s["token"] == "" {
-		p := envPrefix(name)
+	p := envPrefix(name)
+	switch {
+	case s["url"] == "" && s["token"] == "":
 		return nil, fail(exitConfig, "%s needs a URL and token: set %sURL and %sAPI_TOKEN, or url and token under [%s] in %s",
 			name, p, p, name, configPath())
+	case s["url"] == "":
+		return nil, fail(exitConfig, "%s needs a URL: set %sURL, or url under [%s] in %s", name, p, name, configPath())
+	case s["token"] == "":
+		return nil, fail(exitConfig, "%s needs a token: set %sAPI_TOKEN, or token under [%s] in %s", name, p, name, configPath())
 	}
 	c := &client{name: name, base: strings.TrimRight(s["url"], "/"), header: http.Header{"Accept": {"application/json"}}}
 	mode := s["auth"]

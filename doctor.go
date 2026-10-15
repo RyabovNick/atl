@@ -79,6 +79,8 @@ func describeSettings(name string, file map[string]string) []setting {
 			s.Value, s.Source = os.Getenv(env), env
 		} else if file[key] != "" {
 			s.Value, s.Source = file[key], "config file"
+		} else if key == "url" && defaultURL(name) != "" {
+			s.Value, s.Source = defaultURL(name), "built-in default"
 		}
 		out = append(out, s)
 	}
@@ -149,8 +151,9 @@ func checkConfluence(c *client, r *serviceReport) {
 
 func diagnose(name string, file map[string]string, fileErr string) serviceReport {
 	r := serviceReport{Name: name, Settings: describeSettings(name, file)}
+	// A built-in URL alone does not make a service configured: every user gets it.
 	for _, s := range r.Settings {
-		if (s.Key == "url" || s.Key == "token") && s.Source != "unset" {
+		if (s.Key == "url" || s.Key == "token") && s.Source != "unset" && s.Source != "built-in default" {
 			r.Configured = true
 		}
 	}
@@ -271,7 +274,8 @@ func writeDoctor(w io.Writer, file fileStatus, reports []serviceReport, code int
 		}
 	}
 	if code == exitConfig && file.Error == "" && !reports[0].Configured && !reports[1].Configured {
-		fmt.Fprintf(&b, "\nNothing is configured: set JIRA_URL and JIRA_API_TOKEN and/or CONFLUENCE_URL and CONFLUENCE_API_TOKEN, or create %s.\n", file.Path)
+		fmt.Fprintf(&b, "\nNothing is configured: set %s and/or %s, or create %s.\n",
+			credentialVars("jira"), credentialVars("confluence"), file.Path)
 	}
 	io.WriteString(w, b.String())
 }
