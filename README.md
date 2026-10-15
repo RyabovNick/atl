@@ -116,11 +116,3 @@ is needed. `go test -cover ./...` reports coverage.
 `make lint` runs [golangci-lint](https://golangci-lint.run) v2 with the
 linters in [.golangci.yml](.golangci.yml); CI runs the same version, plus
 the race detector and a `go mod tidy` check.
-
-## Releasing
-
-Push a `vX.Y.Z` tag. [CI](.github/workflows/ci.yml) tests and lints every
-push and pull request; on a version tag it runs `make dist`, which builds Linux, macOS and
-Windows binaries for amd64 and arm64 plus `SHA256SUMS`, and attaches them to
-a GitHub release, which is what `install.sh` downloads. `make dist` builds
-the same files locally into `dist/`.
