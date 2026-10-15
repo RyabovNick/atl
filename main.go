@@ -26,9 +26,10 @@ const usage = `atl: read-only Jira and Confluence lookups
                                               Confluence pages and blog posts
   atl doctor [--json]                         where each setting comes from, and
                                               whether each service accepts its token
-  atl install [--bin-dir DIR] [--no-binary] [--no-agents] [--force]
-                                              copy the binary, write the opencode skill
-                                              and the AGENTS.md section; safe to rerun
+  atl install [--agents LIST] [--bin-dir DIR] [--no-binary] [--no-instructions] [--force]
+                                              copy the binary, write the skill and the
+                                              instructions section for Claude Code, Codex
+                                              and/or opencode; asks which without --agents
   atl uninstall [--bin-dir DIR] [--keep-binary]
   atl version
 

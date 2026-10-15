@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 )
 
@@ -35,11 +36,7 @@ func opencodeDir() (string, error) {
 		return filepath.Join(d, "opencode"), nil
 	}
 	// opencode uses ~/.config on macOS and Windows too, not their native config dirs.
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fail(exitConfig, "cannot find the home directory: %v", err)
-	}
-	return filepath.Join(home, ".config", "opencode"), nil
+	return inHome("", ".config", "opencode")()
 }
 
 func defaultBinDir() (string, error) {
@@ -216,18 +213,35 @@ func installBinary(binDir string) (string, string, error) {
 	return dst, status, err
 }
 
-func installAgents(dir string, force bool) (string, string, error) {
-	path := filepath.Join(dir, "AGENTS.md")
+// installInstructions adds or updates the atl section in an agent's instructions file.
+func installInstructions(path string, force bool) (string, error) {
 	old, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return path, "", err
+		return "", err
 	}
 	doc, err := upsertBlock(string(old), agentsSection, force)
 	if err != nil {
-		return path, "", fail(exitConfig, "%s: %v; fix it by hand or rerun with --force", path, err)
+		return "", fail(exitConfig, "%s: %v; fix it by hand or rerun with --force", path, err)
 	}
-	status, err := writeIfChanged(path, []byte(doc), 0o644, false)
-	return path, status, err
+	return writeIfChanged(path, []byte(doc), 0o644, false)
+}
+
+// legacySkillDir is where atl used to put the opencode skill. opencode now
+// reads the copy in ~/.agents/skills, and two copies would clash.
+func legacySkillDir() (string, error) {
+	d, err := opencodeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(d, "skills", "atlassian"), nil
+}
+
+func agentNames(as []agent) string {
+	names := make([]string, len(as))
+	for i, a := range as {
+		names[i] = a.name
+	}
+	return strings.Join(names, ", ")
 }
 
 func onPath(dir string) bool {
@@ -259,23 +273,26 @@ func writeSteps(w io.Writer, title string, steps []step) {
 	fmt.Fprintf(w, "%s\n", title)
 	for _, s := range steps {
 		if s.path == "" {
-			fmt.Fprintf(w, "  %-7s %s\n", s.what, s.status)
+			fmt.Fprintf(w, "  %-12s %s\n", s.what, s.status)
 			continue
 		}
-		fmt.Fprintf(w, "  %-7s %s (%s)\n", s.what, s.path, s.status)
+		fmt.Fprintf(w, "  %-12s %s (%s)\n", s.what, s.path, s.status)
 	}
 }
 
 func cmdInstall(args []string, stdout, stderr io.Writer) error {
-	fl := newFlags("install", "", "Install atl for opencode: copy this binary to --bin-dir, write the atlassian\nskill, and add a short section to opencode's AGENTS.md. Safe to rerun.", stderr)
+	fl := newFlags("install", "", "Install atl for coding agents: copy this binary to --bin-dir, write the atlassian\n"+
+		"skill, and add a short section to each agent's global instructions file. Safe to rerun.\n"+
+		"Without --agents it asks, starting from the agents found on this machine.", stderr)
 	binDefault, err := defaultBinDir()
 	if err != nil {
 		return err
 	}
 	binDir := fl.String("bin-dir", binDefault, "where to copy the binary")
+	agentList := fl.String("agents", "", "agents to set up without asking: "+agentIDs()+", or all")
 	noBinary := fl.Bool("no-binary", false, "do not copy the binary")
-	noAgents := fl.Bool("no-agents", false, "do not touch AGENTS.md")
-	force := fl.Bool("force", false, "replace a damaged atl block in AGENTS.md: from the first atl marker to the last end marker, or to the end of the file")
+	noInstructions := fl.Bool("no-instructions", false, "do not touch CLAUDE.md or AGENTS.md")
+	force := fl.Bool("force", false, "replace a damaged atl section in an instructions file: from the first atl marker to the last end marker, or to the end of the file")
 	pos, err := parseFlags(fl, args)
 	if err != nil {
 		return err
@@ -283,7 +300,12 @@ func cmdInstall(args []string, stdout, stderr io.Writer) error {
 	if len(pos) > 0 {
 		return fail(exitUsage, "install takes no arguments")
 	}
-	dir, err := opencodeDir()
+	var chosen []agent
+	if *agentList != "" {
+		chosen, err = parseAgents(*agentList)
+	} else {
+		chosen, err = chooseAgents()
+	}
 	if err != nil {
 		return err
 	}
@@ -299,24 +321,50 @@ func cmdInstall(args []string, stdout, stderr io.Writer) error {
 		steps = append(steps, step{"binary", path, status})
 	}
 
-	skillPath := filepath.Join(dir, "skills", "atlassian", "SKILL.md")
-	status, err := writeIfChanged(skillPath, skillMD, 0o644, false)
-	if err != nil {
-		return fail(exitAPI, "writing the skill: %v", err)
+	written := map[string]bool{}
+	for _, a := range chosen {
+		dir, err := a.skillsDir()
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(dir, "atlassian", "SKILL.md")
+		if written[path] {
+			continue
+		}
+		written[path] = true
+		status, err := writeIfChanged(path, skillMD, 0o644, false)
+		if err != nil {
+			return fail(exitAPI, "writing the skill: %v", err)
+		}
+		steps = append(steps, step{"skill", path, status})
 	}
-	steps = append(steps, step{"skill", skillPath, status})
+	if slices.ContainsFunc(chosen, func(a agent) bool { return a.id == "opencode" }) {
+		legacy, err := legacySkillDir()
+		if err != nil {
+			return err
+		}
+		if removePath(legacy) == "removed" {
+			steps = append(steps, step{"old skill", legacy, "removed"})
+		}
+	}
 
-	if *noAgents {
-		steps = append(steps, step{"agents", "", "skipped (--no-agents)"})
-	} else {
-		path, status, err := installAgents(dir, *force)
+	for _, a := range chosen {
+		if *noInstructions {
+			steps = append(steps, step{a.name, "", "instructions skipped (--no-instructions)"})
+			continue
+		}
+		path, err := a.instructions()
+		if err != nil {
+			return err
+		}
+		status, err := installInstructions(path, *force)
 		if err != nil {
 			if _, ok := errors.AsType[*atlError](err); ok {
 				return err
 			}
 			return fail(exitAPI, "writing %s: %v", path, err)
 		}
-		steps = append(steps, step{"agents", path, status})
+		steps = append(steps, step{a.name, path, status})
 	}
 
 	writeSteps(stdout, "Installed atl "+version+":", steps)
@@ -330,13 +378,14 @@ Next steps:
      Confluence needs a personal access token (avatar → Settings → Personal Access Tokens),
      sent as Bearer: leave CONFLUENCE_USERNAME unset. Tokens from API-token apps may be rejected.
   2. Run: atl doctor
-  3. Restart opencode so it loads the skill.
-`, credentialVars("jira"), credentialVars("confluence"), configPath())
+  3. Restart %s to load the skill.
+`, credentialVars("jira"), credentialVars("confluence"), configPath(), agentNames(chosen))
 	return nil
 }
 
 func cmdUninstall(args []string, stdout, stderr io.Writer) error {
-	fl := newFlags("uninstall", "", "Remove what `atl install` added: the binary in --bin-dir, the atlassian skill,\nand the atl section of opencode's AGENTS.md. The config file is left alone.", stderr)
+	fl := newFlags("uninstall", "", "Remove what `atl install` added for every agent: the binary in --bin-dir, the\n"+
+		"atlassian skill, and the atl section of each instructions file. The config file is left alone.", stderr)
 	binDefault, err := defaultBinDir()
 	if err != nil {
 		return err
@@ -350,21 +399,44 @@ func cmdUninstall(args []string, stdout, stderr io.Writer) error {
 	if len(pos) > 0 {
 		return fail(exitUsage, "uninstall takes no arguments")
 	}
-	dir, err := opencodeDir()
-	if err != nil {
-		return err
-	}
 
 	var steps []step
-	skillDir := filepath.Join(dir, "skills", "atlassian")
-	steps = append(steps, step{"skill", skillDir, removePath(skillDir)})
-
-	agentsPath := filepath.Join(dir, "AGENTS.md")
-	status, err := uninstallAgents(agentsPath)
+	legacy, err := legacySkillDir()
 	if err != nil {
 		return err
 	}
-	steps = append(steps, step{"agents", agentsPath, status})
+	skillDirs := []string{legacy}
+	for _, a := range agents {
+		dir, err := a.skillsDir()
+		if err != nil {
+			return err
+		}
+		skillDirs = append(skillDirs, filepath.Join(dir, "atlassian"))
+	}
+	seen := map[string]bool{}
+	for _, dir := range skillDirs {
+		if seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		if status := removePath(dir); status != "absent" {
+			steps = append(steps, step{"skill", dir, status})
+		}
+	}
+
+	for _, a := range agents {
+		path, err := a.instructions()
+		if err != nil {
+			return err
+		}
+		status, err := uninstallInstructions(path)
+		if err != nil {
+			return err
+		}
+		if status != "absent" && status != "no atl section" {
+			steps = append(steps, step{a.name, path, status})
+		}
+	}
 
 	if *keepBinary {
 		steps = append(steps, step{"binary", "", "kept (--keep-binary)"})
@@ -377,7 +449,7 @@ func cmdUninstall(args []string, stdout, stderr io.Writer) error {
 		steps = append(steps, step{"binary", bin, status})
 	}
 	writeSteps(stdout, "Uninstalled atl:", steps)
-	fmt.Fprintf(stdout, "\nLeft in place: %s, and any JIRA_*/CONFLUENCE_* variables. Restart opencode.\n", configPath())
+	fmt.Fprintf(stdout, "\nLeft in place: %s, and any JIRA_*/CONFLUENCE_* variables. Restart your agents.\n", configPath())
 	return nil
 }
 
@@ -391,7 +463,7 @@ func removePath(path string) string {
 	return "removed"
 }
 
-func uninstallAgents(path string) (string, error) {
+func uninstallInstructions(path string) (string, error) {
 	old, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "absent", nil

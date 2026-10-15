@@ -1,16 +1,28 @@
 # atl
 
 Read-only Jira and Confluence Data Center (REST API v2) lookups for coding
-agents, plus the opencode skill that tells an agent when to use them.
+agents, plus a skill for Claude Code, Codex and opencode that tells the agent
+when to use them.
 
 ## Install
 
-Each way ends in `atl install`. It copies the binary to `~/.local/bin`
-(`--bin-dir` to change), writes the `atlassian` skill to
-`~/.config/opencode/skills/`, and adds a short section to
-`~/.config/opencode/AGENTS.md` telling agents to check the branch for an issue
-key. That section sits between `<!-- atl:begin -->` and `<!-- atl:end -->`.
-Rerunning updates it in place and leaves the rest of the file alone.
+Each way ends in `atl install`. It asks which agents to set up (space to
+select, enter to confirm), with the ones found on this machine already
+selected; `--agents claude,codex,opencode` or `--agents all` skips the
+question. It copies the binary to `~/.local/bin` (`--bin-dir` to change),
+writes the `atlassian` skill, and adds a short section to each agent's global
+instructions telling it to check the branch for an issue key:
+
+| Agent | Skill | Instructions |
+| --- | --- | --- |
+| Claude Code | `~/.claude/skills/atlassian/` | `~/.claude/CLAUDE.md` |
+| Codex | `~/.agents/skills/atlassian/` | `~/.codex/AGENTS.md` |
+| opencode | `~/.agents/skills/atlassian/` | `~/.config/opencode/AGENTS.md` |
+
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `OPENCODE_CONFIG_DIR` move those
+directories. The section sits between `<!-- atl:begin -->` and
+`<!-- atl:end -->`; rerunning updates it in place and leaves the rest of the
+file alone.
 
 - **Linux or macOS, no Go:** run [install.sh](install.sh). It downloads the
   latest release and checks it against `SHA256SUMS`. `ATL_VERSION` picks a
@@ -28,7 +40,7 @@ Rerunning updates it in place and leaves the rest of the file alone.
   `atl install`. From a clone, `make install` runs the tests, builds, and
   runs `./atl install`.
 
-Then set the tokens, check them, and restart opencode:
+Then set the tokens, check them, and restart your agents:
 
 ```bash
 export JIRA_URL=https://jira.example.com JIRA_API_TOKEN=...
@@ -37,8 +49,8 @@ export CONFLUENCE_URL=https://confluence.example.com CONFLUENCE_API_TOKEN=...
 atl doctor            # where each setting comes from; does each service accept its token
 ```
 
-`atl uninstall` (or `make uninstall`) removes the binary, the skill and the
-AGENTS.md section, and leaves the config file in place. `atl version` prints
+`atl uninstall` (or `make uninstall`) removes the binary, the skills and the
+instructions sections for every agent, and leaves the config file in place. `atl version` prints
 the build's version.
 
 ## Commands

@@ -1,8 +1,8 @@
 #!/bin/sh
 # Installs atl on Linux or macOS without Go: downloads a release binary from
 # GitHub, verifies its checksum, and runs `atl install`, which copies the binary
-# to ~/.local/bin and sets up the opencode skill. Arguments are passed on to
-# `atl install`, e.g. `sh install.sh --bin-dir /usr/local/bin`.
+# to ~/.local/bin and sets up the skill for Claude Code, Codex and/or opencode.
+# Arguments are passed on to `atl install`, e.g. `sh install.sh --agents all`.
 #
 #   ATL_VERSION   release to install, e.g. v1.2.0 (default: the latest release)
 set -eu
