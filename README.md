@@ -116,3 +116,7 @@ is needed. `go test -cover ./...` reports coverage.
 `make lint` runs [golangci-lint](https://golangci-lint.run) v2 with the
 linters in [.golangci.yml](.golangci.yml); CI runs the same version, plus
 the race detector and a `go mod tidy` check.
+
+## License
+
+[MIT](LICENSE)
