@@ -43,7 +43,9 @@ jobs:
           version: v2.14.0
 
   # Tag vX.Y.Z to release: make dist builds every platform plus SHA256SUMS,
-  # and the release holds them, which is what install.sh downloads.
+  # and the release holds them, which is what install.sh downloads. A tag
+  # with a suffix, such as v1.2.0-rc.1, becomes a pre-release, which
+  # releases/latest skips: install it with ATL_VERSION=v1.2.0-rc.1.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [test, lint]
@@ -56,6 +58,9 @@ jobs:
         with:
           go-version-file: go.mod
       - run: make dist VERSION="$GITHUB_REF_NAME"
-      - run: gh release create "$GITHUB_REF_NAME" dist/* --title "atl $GITHUB_REF_NAME" --generate-notes
+      - run: |
+          pre=
+          case "$GITHUB_REF_NAME" in *-*) pre=--prerelease ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* --title "atl $GITHUB_REF_NAME" --generate-notes $pre
         env:
           GH_TOKEN: ${{ github.token }}

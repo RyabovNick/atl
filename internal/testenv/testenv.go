@@ -89,6 +89,7 @@ func FakeServer(t *testing.T) *httptest.Server {
 		{"id":"assignee","name":"Assignee","custom":false,"schema":{"type":"user"}},
 		{"id":"description","name":"Description","custom":false,"schema":{"type":"string"}},
 		{"id":"customfield_10008","name":"Epic Link","custom":true,"schema":{"type":"any","custom":"com.pyxis.greenhopper.jira:gh-epic-link"}},
+		{"id":"customfield_10009","name":"Имя эпика","custom":true,"schema":{"type":"string","custom":"com.pyxis.greenhopper.jira:gh-epic-label"}},
 		{"id":"customfield_10010","name":"Story Points","custom":true,"schema":{"type":"number"}},
 		{"id":"customfield_10011","name":"Acceptance Criteria","custom":true,"schema":{"type":"string","custom":"com.atlassian.jira.plugin.system.customfieldtypes:textarea"}},
 		{"id":"customfield_10012","name":"Sprint","custom":true,"schema":{"type":"array","custom":"com.pyxis.greenhopper.jira:gh-sprint"}},
@@ -143,6 +144,8 @@ func FakeServer(t *testing.T) *httptest.Server {
 		"comment":{"comments":[{"id":"501","body":"<p>Also <em>this</em>.</p><h2>Note</h2><p>n</p>"}]}
 	}`)
 	issueReply("PROJ-1", `{"summary":"Login epic","status":{"name":"In Progress","statusCategory":{"key":"indeterminate"}},"issuetype":{"name":"Epic"}}`, "")
+	// A localized epic: only its Epic Name says what it is.
+	issueReply("PROJ-2", `{"summary":"Billing","issuetype":{"name":"Эпик"},"customfield_10009":"Billing"}`, "")
 	issueReply("PROJ-124", `{"summary":"Tests","issuetype":{"name":"Sub-task"},"parent":{"key":"PROJ-123","fields":{"summary":"Fix login"}}}`, "")
 	issueReply("PROJ-77", `{"summary":"Child","issuetype":{"name":"Story"},"parent":{"key":"PROJ-1"}}`, "")
 	issueReply("PROJ-78", `{"summary":"Orphan sub","issuetype":{"name":"Sub-task"},"parent":{"key":"PROJ-5"}}`, "")
@@ -155,7 +158,7 @@ func FakeServer(t *testing.T) *httptest.Server {
 			t.Errorf("search fields=%q", q.Get("fields"))
 		}
 		switch jql := q.Get("jql"); jql {
-		case `"Epic Link" = PROJ-1 OR parent = PROJ-1 ORDER BY key`:
+		case `cf[10008] = PROJ-1 OR parent = PROJ-1 ORDER BY key`:
 			if q.Get("maxResults") == "1" {
 				fmt.Fprint(w, `{"total":5,"issues":[{"key":"PROJ-7","fields":{"summary":"API","status":{"name":"Open","statusCategory":{"key":"new"}}}}]}`)
 				return
@@ -167,8 +170,12 @@ func FakeServer(t *testing.T) *httptest.Server {
 				{"key":"PROJ-10","fields":{"summary":"Odd","status":{"name":"Parked","statusCategory":{"key":"undefined"}}}},
 				{"key":"PROJ-11","fields":{"summary":"No status"}}
 			]}`)
-		case `"Epic Link" = PROJ-5 OR parent = PROJ-5 ORDER BY key`, "project = NONE":
+		case `cf[10008] = PROJ-2 OR parent = PROJ-2 ORDER BY key`, "parent = PROJ-5 ORDER BY key", "project = NONE":
 			fmt.Fprint(w, `{"total":0,"issues":[]}`)
+		case `cf[10008] = PROJ-5 OR parent = PROJ-5 ORDER BY key`, `cf[10008] = PROJ-5 ORDER BY key`:
+			// What Jira says when an Epic Link clause names an issue that is not an epic.
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"errorMessages":["The value 'PROJ-5' does not exist for the field 'Epic Link'."],"errors":{}}`)
 		case "project = PROJ ORDER BY updated DESC":
 			if q.Get("maxResults") != "2" {
 				t.Errorf("maxResults=%q", q.Get("maxResults"))

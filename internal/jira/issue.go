@@ -170,12 +170,7 @@ func RunIssue(args []string, stdout, stderr io.Writer) error {
 	if _, err = jira.Get("/rest/api/2/field", nil, &allFields); err != nil {
 		return err
 	}
-	epicField := ""
-	for _, f := range allFields {
-		if f.Name == "Epic Link" {
-			epicField = f.ID
-		}
-	}
+	epicField := findEpicFields(allFields).link
 
 	var is issue
 	path := "/rest/api/2/issue/" + url.PathEscape(key)

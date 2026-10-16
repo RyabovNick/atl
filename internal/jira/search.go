@@ -2,6 +2,7 @@ package jira
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -79,17 +80,40 @@ func RunJQL(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func epicLinkField(jira *atlassian.Client) (string, error) {
-	var fields []fieldDef
-	if _, err := jira.Get("/rest/api/2/field", nil, &fields); err != nil {
-		return "", err
-	}
+// epicFields holds the ids of Jira Software's Epic Link and Epic Name fields,
+// "" when the instance has none.
+type epicFields struct{ link, name string }
+
+// findEpicFields matches by field type: names are translated with the user's
+// locale, so "Epic Link" is not a reliable way to find the field.
+func findEpicFields(fields []fieldDef) epicFields {
+	var ef epicFields
 	for _, f := range fields {
-		if f.Name == "Epic Link" {
-			return f.ID, nil
+		switch {
+		case strings.HasSuffix(f.Schema.Custom, ":gh-epic-link"):
+			ef.link = f.ID
+		case strings.HasSuffix(f.Schema.Custom, ":gh-epic-label"):
+			ef.name = f.ID
 		}
 	}
-	return "", nil
+	return ef
+}
+
+func loadEpicFields(jira *atlassian.Client) (epicFields, error) {
+	var fields []fieldDef
+	if _, err := jira.Get("/rest/api/2/field", nil, &fields); err != nil {
+		return epicFields{}, err
+	}
+	return findEpicFields(fields), nil
+}
+
+// jqlClause names a custom field by id, as cf[10008], which works whatever the
+// field is called.
+func jqlClause(fieldID string) string {
+	if n, ok := strings.CutPrefix(fieldID, "customfield_"); ok {
+		return "cf[" + n + "]"
+	}
+	return fieldID
 }
 
 type epicCandidate struct {
@@ -97,24 +121,35 @@ type epicCandidate struct {
 	ref      issueRef
 	epicLink string
 	parent   string
+	isEpic   bool
 }
 
-func fetchEpicCandidate(jira *atlassian.Client, key, epicField string) (*epicCandidate, error) {
-	fields := "summary,status,issuetype,parent"
-	if epicField != "" {
-		fields += "," + epicField
+func fetchEpicCandidate(jira *atlassian.Client, key string, ef epicFields) (*epicCandidate, error) {
+	fields := []string{"summary", "status", "issuetype", "parent"}
+	for _, id := range []string{ef.link, ef.name} {
+		if id != "" {
+			fields = append(fields, id)
+		}
 	}
 	var c epicCandidate
 	var extra struct {
 		Fields map[string]json.RawMessage `json:"fields"`
 	}
-	raw, err := jira.Get("/rest/api/2/issue/"+url.PathEscape(key), url.Values{"fields": {fields}}, &c.ref)
+	raw, err := jira.Get("/rest/api/2/issue/"+url.PathEscape(key), url.Values{"fields": {strings.Join(fields, ",")}}, &c.ref)
 	if err != nil {
 		return nil, err
 	}
 	c.raw = raw
-	if json.Unmarshal(raw, &extra) == nil && epicField != "" {
-		_ = json.Unmarshal(extra.Fields[epicField], &c.epicLink)
+	if json.Unmarshal(raw, &extra) == nil && ef.link != "" {
+		_ = json.Unmarshal(extra.Fields[ef.link], &c.epicLink)
+	}
+	// Only epics have an Epic Name, which also catches a type named "Эпик".
+	var epicName string
+	if ef.name != "" && json.Unmarshal(extra.Fields[ef.name], &epicName) == nil && epicName != "" {
+		c.isEpic = true
+	}
+	if strings.EqualFold(atlassian.NameOf(c.ref.Fields.IssueType), "epic") {
+		c.isEpic = true
 	}
 	var parent struct {
 		Key string `json:"key"`
@@ -128,26 +163,26 @@ func fetchEpicCandidate(jira *atlassian.Client, key, epicField string) (*epicCan
 // resolveEpic walks from an issue to its epic: its Epic Link, or its parent's
 // when it is a subtask. An issue with neither is taken as the epic itself, since
 // localized instances do not call the type "Epic".
-func resolveEpic(jira *atlassian.Client, key, epicField string, stderr io.Writer) (*epicCandidate, error) {
-	c, err := fetchEpicCandidate(jira, key, epicField)
+func resolveEpic(jira *atlassian.Client, key string, ef epicFields, stderr io.Writer) (*epicCandidate, error) {
+	c, err := fetchEpicCandidate(jira, key, ef)
 	if err != nil {
 		return nil, err
 	}
 	kind := cli.Or(atlassian.NameOf(c.ref.Fields.IssueType), "issue")
 	switch {
-	case strings.EqualFold(kind, "epic"):
+	case c.isEpic:
 		return c, nil
 	case c.epicLink != "":
 		fmt.Fprintf(stderr, "atl: %s is a %s; showing its epic %s\n", c.ref.Key, kind, c.epicLink)
-		return fetchEpicCandidate(jira, c.epicLink, epicField)
+		return fetchEpicCandidate(jira, c.epicLink, ef)
 	case c.parent != "":
-		p, err := fetchEpicCandidate(jira, c.parent, epicField)
+		p, err := fetchEpicCandidate(jira, c.parent, ef)
 		if err != nil {
 			return nil, err
 		}
 		if p.epicLink != "" {
 			fmt.Fprintf(stderr, "atl: %s is a %s; showing its parent %s's epic %s\n", c.ref.Key, kind, p.ref.Key, p.epicLink)
-			return fetchEpicCandidate(jira, p.epicLink, epicField)
+			return fetchEpicCandidate(jira, p.epicLink, ef)
 		}
 		fmt.Fprintf(stderr, "atl: %s is a %s; showing its parent %s\n", c.ref.Key, kind, p.ref.Key)
 		return p, nil
@@ -155,6 +190,38 @@ func resolveEpic(jira *atlassian.Client, key, epicField string, stderr io.Writer
 		fmt.Fprintf(stderr, "atl: %s has no epic or parent; listing its own children\n", c.ref.Key)
 		return c, nil
 	}
+}
+
+// epicChildren lists the issues under key. Jira rejects a whole query when one
+// clause is unusable (Epic Link on a key that is not an epic, or a field the
+// project cannot see), so each clause is retried alone before giving up.
+func epicChildren(jira *atlassian.Client, key, linkField string, limit int, stderr io.Writer) (string, []byte, searchResult, error) {
+	clauses := []string{"parent = " + key}
+	if linkField != "" {
+		clauses = []string{jqlClause(linkField) + " = " + key, "parent = " + key}
+	}
+	queries := []string{strings.Join(clauses, " OR ")}
+	if len(clauses) > 1 {
+		queries = append(queries, clauses...)
+	}
+	var firstErr error
+	for _, q := range queries {
+		jql := q + " ORDER BY key"
+		raw, res, err := searchIssues(jira, jql, limit)
+		if err == nil {
+			if firstErr != nil {
+				fmt.Fprintf(stderr, "atl: Jira rejected the full query (%v); showing only: %s\n", firstErr, q)
+			}
+			return jql, raw, res, nil
+		}
+		if e, ok := errors.AsType[*cli.Error](err); !ok || e.Code != cli.ExitUsage {
+			return "", nil, searchResult{}, err
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	return "", nil, searchResult{}, firstErr
 }
 
 var statusGroups = []struct{ key, label string }{
@@ -191,19 +258,15 @@ func RunEpic(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	epicField, err := epicLinkField(jira)
+	ef, err := loadEpicFields(jira)
 	if err != nil {
 		return err
 	}
-	epic, err := resolveEpic(jira, key, epicField, stderr)
+	epic, err := resolveEpic(jira, key, ef, stderr)
 	if err != nil {
 		return err
 	}
-	jql := fmt.Sprintf("parent = %s ORDER BY key", epic.ref.Key)
-	if epicField != "" {
-		jql = fmt.Sprintf(`"Epic Link" = %[1]s OR parent = %[1]s ORDER BY key`, epic.ref.Key)
-	}
-	raw, res, err := searchIssues(jira, jql, *limit)
+	jql, raw, res, err := epicChildren(jira, epic.ref.Key, ef.link, *limit, stderr)
 	if err != nil {
 		return err
 	}
@@ -228,13 +291,17 @@ func RunEpic(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 
+	// The epic's own description lives in `atl issue`; say so, since agents
+	// otherwise take this header for all there is.
+	detail := fmt.Sprintf("(details and description: atl issue %s)\n", epic.ref.Key)
 	fmt.Fprintf(stdout, "# %s\n\n", issueLine(&epic.ref))
 	if len(res.Issues) == 0 {
-		fmt.Fprintf(stdout, "no child issues for: %s\n", jql)
+		fmt.Fprintf(stdout, "no child issues for: %s\n%s", jql, detail)
 		return nil
 	}
 	fmt.Fprintf(stdout, "%d issues: %s\n", res.Total, strings.Join(counts, ", "))
 	fmt.Fprintf(stdout, "URL: %s/browse/%s\n", jira.Base, epic.ref.Key)
+	fmt.Fprint(stdout, detail)
 	for _, g := range order {
 		if len(groups[g]) == 0 {
 			continue

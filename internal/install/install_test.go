@@ -49,7 +49,7 @@ func newInstallFixture(t *testing.T) installFixture {
 	t.Setenv("OPENCODE_CONFIG_DIR", f.oc)
 	t.Setenv("CLAUDE_CONFIG_DIR", f.claude)
 	t.Setenv("CODEX_HOME", f.codex)
-	// Only opencode is installed, so it is the agent detected.
+	// Only opencode is installed, the agent set up by default.
 	if err := os.MkdirAll(f.oc, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -397,23 +397,23 @@ func TestInstallAgents(t *testing.T) {
 	}
 }
 
-func TestInstallDetectsAgents(t *testing.T) {
+func TestInstallDefaultsToOpencode(t *testing.T) {
 	f := newInstallFixture(t)
-	if err := os.MkdirAll(f.codex, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Without a terminal, install sets up the agents found on this machine.
-	out, _, code := runAtl(t, "install", "--no-binary")
-	if code != 0 || !strings.Contains(out, "Codex") || !strings.Contains(out, "opencode") || strings.Contains(out, "Claude") {
-		t.Errorf("detected install: exit %d\n%s", code, out)
-	}
-	for _, d := range []string{f.oc, f.codex} {
-		if err := os.RemoveAll(d); err != nil {
+	for _, d := range []string{f.codex, f.claude} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, errs, code := runAtl(t, "install", "--no-binary"); code != cli.ExitUsage || !strings.Contains(errs, "no coding agent found") {
-		t.Errorf("nothing detected: exit %d, %s", code, errs)
+	// Without a terminal, install sets up opencode only, even with other agents present.
+	out, _, code := runAtl(t, "install", "--no-binary")
+	if code != 0 || !strings.Contains(out, "opencode") || strings.Contains(out, "Codex") || strings.Contains(out, "Claude") {
+		t.Errorf("default install: exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(f.codex, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Errorf("Codex instructions written by default: %v", err)
+	}
+	if fmt.Sprint(defaultSelection()) != "[false false true]" {
+		t.Errorf("defaultSelection = %v", defaultSelection())
 	}
 }
 
@@ -435,7 +435,7 @@ func TestSelectLoop(t *testing.T) {
 		want []bool
 		err  error
 	}{
-		{"enter keeps detected", []string{"\r"}, []bool{false, true, false}, nil},
+		{"enter keeps the default", []string{"\r"}, []bool{false, true, false}, nil},
 		{"move and toggle", []string{"\x1b[B", "\x1b[B", " ", "k", " ", "\r"}, []bool{false, false, true}, nil},
 		{"wraps upward", []string{"\x1b[A", " ", "\r"}, []bool{false, true, true}, nil},
 		{"a toggles all", []string{"a", "\r"}, []bool{true, true, true}, nil},
