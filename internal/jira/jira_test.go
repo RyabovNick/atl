@@ -338,8 +338,16 @@ func TestEpicResolution(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("PROJ-5: exit %d: %s", code, errs)
 	}
-	testenv.MustContain(t, errs, "atl: PROJ-5 has no epic or parent; listing its own children")
-	testenv.MustContain(t, out, "# PROJ-5 [?] Plain\n", `no child issues for: "Epic Link" = PROJ-5 OR parent = PROJ-5 ORDER BY key`)
+	// Jira rejects the Epic Link clause for a non-epic; the parent clause alone still runs.
+	testenv.MustContain(t, errs, "atl: PROJ-5 has no epic or parent; listing its own children",
+		"atl: Jira rejected the full query (jira: rejected the request: The value 'PROJ-5' does not exist for the field 'Epic Link'.); showing only: parent = PROJ-5\n")
+	testenv.MustContain(t, out, "# PROJ-5 [?] Plain\n", "no child issues for: parent = PROJ-5 ORDER BY key")
+
+	out, errs, code = runAtl(t, "epic", "PROJ-2")
+	if code != 0 || errs != "" {
+		t.Fatalf("localized epic: exit %d: %q", code, errs)
+	}
+	testenv.MustContain(t, out, "# PROJ-2 [?] Billing (Эпик)\n")
 
 	out, errs, _ = runAtl(t, "epic", "PROJ-78")
 	testenv.MustContain(t, errs, "atl: PROJ-78 is a Sub-task; showing its parent PROJ-5\n")
