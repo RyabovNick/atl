@@ -217,7 +217,23 @@ func FakeServer(t *testing.T) *httptest.Server {
 		"version":{"number":3,"when":"2026-09-30T12:00:00.000Z","by":{"displayName":"Ann"}},
 		"ancestors":[{"title":"Home"},{"title":"Auth"}],
 		"body":{"view":{"value":"<h2>Flow</h2><p>Users <strong>log in</strong>.</p><ul><li>one</li></ul>"}},
+		"children":{"comment":{"size":2}},
 		"_links":{"webui":"/display/DEV/Login+spec"}}`)
+	// A footer thread with a reply listed before an unrelated inline comment, as depth=all can return them.
+	reply("/wiki/rest/api/content/42/child/comment", func(r *http.Request) string {
+		if q := r.URL.Query(); q.Get("depth") != "all" || !strings.Contains(q.Get("expand"), "body.view") {
+			t.Errorf("comments fetched with %s", r.URL.RawQuery)
+		}
+		return `{"results":[
+			{"id":"c1","type":"comment","history":{"createdBy":{"displayName":"Ann"},"createdDate":"2026-10-01T09:00:00.000Z"},
+				"ancestors":[],"extensions":{"location":"footer"},"body":{"view":{"value":"<p>Is <em>SSO</em> in scope?</p><h1>Why</h1>"}}},
+			{"id":"c2","type":"comment","history":{"createdBy":{"displayName":"Bob"},"createdDate":"2026-10-02T10:00:00.000Z"},
+				"extensions":{"location":"inline","inlineProperties":{"originalSelection":"log in"},"resolution":{"status":"resolved"}},
+				"ancestors":[],"body":{"view":{"value":"<p>Which IdP?</p>"}}},
+			{"id":"c3","type":"comment","history":{"createdBy":{"displayName":"Cy"},"createdDate":"2026-10-03T11:00:00.000Z"},
+				"ancestors":[{"id":"c1","type":"comment"}],"extensions":{"location":"footer"},"body":{"view":{"value":"<p>No, next quarter.</p>"}}}
+		],"size":3,"_links":{}}`
+	})
 	jsonReply("/wiki/rest/api/content", `{"results":[{"id":"42","title":"Login Flow"}]}`)
 	jsonReply("/wiki/rest/api/content/search", `{"results":[{"id":"42","title":"Login spec","space":{"key":"DEV"},"version":{"when":"2026-09-30T12:00:00.000Z"},"_links":{"webui":"/display/DEV/Login+spec"}}],"size":1}`)
 	mux.HandleFunc("/wiki/x/", func(w http.ResponseWriter, r *http.Request) {
@@ -294,7 +310,7 @@ func FakeServer(t *testing.T) *httptest.Server {
 	jsonReply("/wiki/rest/api/content/1000/child/page", `{"results":[{"id":"2000","title":"Grandchild","version":{"when":"2026-09-05T10:00:00.000Z"},"_links":{"webui":"/pages/2000"}}],"size":1,"_links":{}}`)
 	// Every other page is a leaf; anything else under content/ stays a 404.
 	mux.HandleFunc("/wiki/rest/api/content/", func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/child/page") {
+		if !strings.HasSuffix(r.URL.Path, "/child/page") && !strings.HasSuffix(r.URL.Path, "/child/comment") {
 			http.NotFound(w, r)
 		} else if authorized(w, r) {
 			fmt.Fprint(w, `{"results":[],"size":0,"_links":{}}`)

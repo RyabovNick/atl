@@ -44,6 +44,11 @@ type page struct {
 			Value string `json:"value"`
 		} `json:"view"`
 	} `json:"body"`
+	Children struct {
+		Comment struct {
+			Size int `json:"size"`
+		} `json:"comment"`
+	} `json:"children"`
 	Links struct {
 		WebUI string `json:"webui"`
 	} `json:"_links"`
@@ -224,14 +229,16 @@ viewpage.action?pageId=, /pages/<id>, /display/SPACE/Title, /x/<tiny>.
 
 --toc prints the headings with their sizes instead of the body, and --section
 prints only the matching sections. --children lists child pages instead of the
-body; add --toc or --section to get those as well.`, stderr)
+body; add --toc or --section to get those as well. --comments adds footer and
+inline comments, with replies under the comment they answer.`, stderr)
 	maxChars := fs.Int("max-chars", 40000, "truncate the body or sections to this many characters (0 = no limit)")
 	toc := fs.Bool("toc", false, "print the outline of headings with section sizes, not the body")
 	var sections stringsFlag
 	fs.Var(&sections, "section", "print only the section with this heading (repeatable; exact, then prefix, then substring)")
 	children := fs.Bool("children", false, "list child pages instead of the body")
 	depth := fs.Int("depth", 1, "levels of child pages to list with --children (1-3)")
-	asJSON := fs.Bool("json", false, "print the raw API response (with --children, the page and its child tree)")
+	withComments := fs.Bool("comments", false, "include footer and inline comments with their replies")
+	asJSON := fs.Bool("json", false, "print the raw API response (with --children or --comments, the page with those added)")
 	pos, err := cli.ParseFlags(fs, args)
 	if err != nil {
 		return err
@@ -254,7 +261,8 @@ body; add --toc or --section to get those as well.`, stderr)
 		return err
 	}
 	needBody := !*children || *toc || len(sections) > 0
-	expand := "space,version,ancestors"
+	// children.comment only counts comments, so the output can say they exist.
+	expand := "space,version,ancestors,children.comment"
 	if needBody {
 		expand = "body.view," + expand
 	}
@@ -271,14 +279,32 @@ body; add --toc or --section to get those as well.`, stderr)
 			return err
 		}
 	}
+	var cs []comment
+	var rawComments []json.RawMessage
+	var truncatedComments bool
+	if *withComments {
+		if cs, rawComments, truncatedComments, err = pageComments(conf, p.ID); err != nil {
+			return err
+		}
+	}
 	if *asJSON {
-		if !*children {
+		if !*children && !*withComments {
 			return cli.WriteJSON(stdout, raw)
 		}
-		if kids == nil {
-			kids = []childPage{}
+		out := map[string]any{"page": json.RawMessage(raw)}
+		if *children {
+			if kids == nil {
+				kids = []childPage{}
+			}
+			out["children"], out["truncated"] = kids, truncatedKids
 		}
-		combined, jsonErr := json.Marshal(map[string]any{"page": json.RawMessage(raw), "children": kids, "truncated": truncatedKids})
+		if *withComments {
+			if rawComments == nil {
+				rawComments = []json.RawMessage{}
+			}
+			out["comments"], out["comments_truncated"] = rawComments, truncatedComments
+		}
+		combined, jsonErr := json.Marshal(out)
 		if jsonErr != nil {
 			return cli.Fail(cli.ExitAPI, "encoding JSON: %v", jsonErr)
 		}
@@ -350,6 +376,13 @@ body; add --toc or --section to get those as well.`, stderr)
 		if truncatedKids {
 			fmt.Fprintf(&b, "\n(stopped at %d pages; list a child page's children instead)\n", maxChildPages)
 		}
+	}
+	switch {
+	case *withComments:
+		b.WriteString("\n")
+		writeComments(&b, cs, truncatedComments)
+	case p.Children.Comment.Size > 0:
+		b.WriteString("\n(page has comments; add --comments to read them)\n")
 	}
 	_, err = io.WriteString(stdout, b.String())
 	return err

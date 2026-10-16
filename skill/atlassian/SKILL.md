@@ -16,7 +16,7 @@ atl epic [KEY]                      # the epic and its issues, by status
 atl jql '<query>' [--limit N]       # Jira search
 atl history [KEY] [--since 7d]      # who changed what, oldest first
 atl attachment <ID...> | [KEY]      # download files; prints saved paths
-atl page <id|url> [--toc | --section "Heading"... | --children]
+atl page <id|url> [--toc | --section "Heading"... | --children] [--comments]
 atl search "<text>" [--space KEY] [--cql]
 atl doctor                          # config and login check
 ```
@@ -36,7 +36,9 @@ atl doctor                          # config and login check
    ones. For a long page (output says `[truncated at …]`, or a big spec), run
    `--toc` first, then read the parts you need with `--section "<heading>"`
    rather than raising `--max-chars`. Use `--children` on an index or design
-   root to find sub-pages. Use `atl search` when the issue refers to docs
+   root to find sub-pages. When the output says `(page has comments; …)`,
+   add `--comments` if the page looks stale or disputed: open questions and
+   agreed changes often live there. Use `atl search` when the issue refers to docs
    without linking them, with `--space` when you know it.
 4. **Attachments** listed under `## Attachments`: download the ones that hold
    evidence (logs, stack traces, configs, payloads, error screenshots) with
