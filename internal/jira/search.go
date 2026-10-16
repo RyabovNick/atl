@@ -291,13 +291,17 @@ func RunEpic(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 
+	// The epic's own description lives in `atl issue`; say so, since agents
+	// otherwise take this header for all there is.
+	detail := fmt.Sprintf("(details and description: atl issue %s)\n", epic.ref.Key)
 	fmt.Fprintf(stdout, "# %s\n\n", issueLine(&epic.ref))
 	if len(res.Issues) == 0 {
-		fmt.Fprintf(stdout, "no child issues for: %s\n", jql)
+		fmt.Fprintf(stdout, "no child issues for: %s\n%s", jql, detail)
 		return nil
 	}
 	fmt.Fprintf(stdout, "%d issues: %s\n", res.Total, strings.Join(counts, ", "))
 	fmt.Fprintf(stdout, "URL: %s/browse/%s\n", jira.Base, epic.ref.Key)
+	fmt.Fprint(stdout, detail)
 	for _, g := range order {
 		if len(groups[g]) == 0 {
 			continue
