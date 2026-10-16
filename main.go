@@ -22,9 +22,9 @@ const usage = `atl: read-only Jira and Confluence lookups
                                               who changed what, oldest first
   atl attachment [KEY | ID...] [--dir DIR] [--max-bytes N] [--json]
                                               download attachments, print saved paths
-  atl page <id|url> [--toc] [--section H]... [--children [--depth N]] [--max-chars N] [--json]
-                                              Confluence page as Markdown, its outline,
-                                              chosen sections, or its child pages
+  atl page <id|url> [--toc] [--section H]... [--children [--depth N]] [--comments]
+           [--max-chars N] [--json]          Confluence page as Markdown, its outline,
+                                              chosen sections, child pages, or comments
   atl search <text> [--space KEY] [--cql] [--limit N] [--json]
                                               Confluence pages and blog posts
   atl doctor [--json]                         where each setting comes from, and

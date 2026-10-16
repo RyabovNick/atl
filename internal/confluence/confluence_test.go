@@ -239,6 +239,56 @@ func TestPageChildren(t *testing.T) {
 	}
 }
 
+func TestPageComments(t *testing.T) {
+	testenv.Setup(t)
+	out, _, _ := runAtl(t, "page", "42")
+	testenv.MustContain(t, out, "(page has comments; add --comments to read them)")
+	if strings.Contains(out, "## Comments") {
+		t.Errorf("comments printed without --comments:\n%s", out)
+	}
+
+	out, errs, code := runAtl(t, "page", "42", "--comments")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	testenv.MustContain(t, out, "## Comments (3)",
+		"### Ann — 2026-10-01 09:00 · id c1\n\nIs *SSO* in scope?\n\n##### Why",
+		"#### Reply: Cy — 2026-10-03 11:00 · id c3\n\nNo, next quarter.",
+		"### Bob — 2026-10-02 10:00 · id c2 (inline, resolved)\n\n> log in\n\nWhich IdP?")
+	// The reply sits under its thread, ahead of the later top-level comment.
+	if strings.Index(out, "id c3") > strings.Index(out, "id c2") {
+		t.Errorf("reply not grouped with its thread:\n%s", out)
+	}
+
+	out, _, _ = runAtl(t, "page", "77", "--comments", "--toc")
+	testenv.MustContain(t, out, "## Contents", "## Comments (0)\n\n(none)")
+
+	maxComments = 2
+	t.Cleanup(func() { maxComments = 500 })
+	out, _, _ = runAtl(t, "page", "42", "--comments")
+	testenv.MustContain(t, out, "## Comments (2)", "(stopped at 2 comments)")
+
+	out, errs, code = runAtl(t, "page", "42", "--comments", "--json")
+	if code != 0 {
+		t.Fatalf("--json exit %d: %s", code, errs)
+	}
+	type withID struct {
+		ID string `json:"id"`
+	}
+	var got struct {
+		Page      withID             `json:"page"`
+		Comments  []withID           `json:"comments"`
+		Truncated bool               `json:"comments_truncated"`
+		Children  *[]json.RawMessage `json:"children"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Page.ID != "42" || len(got.Comments) != 2 || !got.Truncated || got.Children != nil {
+		t.Errorf("--comments --json = %+v", got)
+	}
+}
+
 func TestConfluenceNotFoundHint(t *testing.T) {
 	testenv.Setup(t)
 	_, errs, code := runAtl(t, "page", "99999")

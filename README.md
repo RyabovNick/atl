@@ -70,6 +70,7 @@ raw API response, or for `attachment` and `doctor` their own report.
 | `atl page <ref> --toc` | the page's headings, indented, with each section's size in characters |
 | `atl page <ref> --section <heading>` | only the matching sections, subsections included; repeatable |
 | `atl page <ref> --children [--depth 1-3]` | child pages with id, update time and URL, instead of the body |
+| `atl page <ref> --comments` | adds footer and inline comments (with the highlighted text and resolved status), replies under their thread; combines with the flags above |
 | `atl search <text> [--space KEY] [--cql] [--limit 10]` | pages and blog posts matching `text ~`, or raw CQL |
 | `atl doctor` | each setting and its source, then a login check per service |
 
