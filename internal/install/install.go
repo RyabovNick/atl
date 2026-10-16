@@ -283,7 +283,7 @@ func writeSteps(w io.Writer, title string, steps []step) {
 func Run(args []string, stdout, stderr io.Writer) error {
 	fl := cli.NewFlags("install", "", "Install atl for coding agents: copy this binary to --bin-dir, write the atlassian\n"+
 		"skill, and add a short section to each agent's global instructions file. Safe to rerun.\n"+
-		"Without --agents it asks, starting from the agents found on this machine.", stderr)
+		"Without --agents it asks, with opencode selected; without a terminal it sets up opencode.", stderr)
 	binDefault, err := defaultBinDir()
 	if err != nil {
 		return err

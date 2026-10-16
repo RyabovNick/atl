@@ -18,7 +18,7 @@ import (
 // short section in its global instructions file.
 type agent struct {
 	id, name string
-	// configDir is the agent's own directory, used to detect it.
+	// configDir is the agent's own directory, shown in the prompt.
 	configDir func() (string, error)
 	// skillsDir is the directory the agent loads global skills from.
 	skillsDir func() (string, error)
@@ -124,17 +124,15 @@ func parseAgents(list string) ([]agent, error) {
 	return out, nil
 }
 
-// detected reports which agents have a config directory on this machine.
-func detected() []bool {
-	found := make([]bool, len(agents))
+// defaultAgent is selected when install asks, and set up when it cannot ask.
+const defaultAgent = "opencode"
+
+func defaultSelection() []bool {
+	selected := make([]bool, len(agents))
 	for i, a := range agents {
-		if d, err := a.configDir(); err == nil {
-			if info, err := os.Stat(d); err == nil && info.IsDir() {
-				found[i] = true
-			}
-		}
+		selected[i] = a.id == defaultAgent
 	}
-	return found
+	return selected
 }
 
 var errCanceled = errors.New("canceled")
@@ -167,22 +165,13 @@ var openTerminal = func() (in, out *os.File, closeFn func(), err error) {
 	return tty, tty, func() { tty.Close() }, nil
 }
 
-// chooseAgents asks which agents to set up, starting from those detected.
-// Without a terminal it takes the detected agents, or fails when there are none.
+// chooseAgents asks which agents to set up, starting from defaultAgent alone.
+// Without a terminal it takes defaultAgent.
 func chooseAgents() ([]agent, error) {
-	selected := detected()
+	selected := defaultSelection()
 	in, out, closeFn, err := openTerminal()
 	if err != nil {
-		var picked []agent
-		for i, a := range agents {
-			if selected[i] {
-				picked = append(picked, a)
-			}
-		}
-		if len(picked) == 0 {
-			return nil, cli.Fail(cli.ExitUsage, "no coding agent found; pass --agents with %s, or all", agentIDs())
-		}
-		return picked, nil
+		return parseAgents(defaultAgent)
 	}
 	defer closeFn()
 

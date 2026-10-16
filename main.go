@@ -32,7 +32,8 @@ const usage = `atl: read-only Jira and Confluence lookups
   atl install [--agents LIST] [--bin-dir DIR] [--no-binary] [--no-instructions] [--force]
                                               copy the binary, write the skill and the
                                               instructions section for Claude Code, Codex
-                                              and/or opencode; asks which without --agents
+                                              and/or opencode; asks which without --agents,
+                                              with opencode selected
   atl uninstall [--bin-dir DIR] [--keep-binary]
   atl version
 

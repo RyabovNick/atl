@@ -7,8 +7,8 @@ when to use them.
 ## Install
 
 Each way ends in `atl install`. It asks which agents to set up (space to
-select, enter to confirm), with the ones found on this machine already
-selected; `--agents claude,codex,opencode` or `--agents all` skips the
+select, enter to confirm), with opencode selected; without a terminal it sets
+up opencode alone. `--agents claude,codex,opencode` or `--agents all` skips the
 question. It copies the binary to `~/.local/bin` (`--bin-dir` to change),
 writes the `atlassian` skill, and adds a short section to each agent's global
 instructions telling it to check the branch for an issue key:
