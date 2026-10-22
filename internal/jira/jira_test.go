@@ -516,19 +516,9 @@ func TestHistoryJSONAndErrors(t *testing.T) {
 	}
 }
 
-func TestLineDiff(t *testing.T) {
-	for _, tc := range []struct {
-		a, b string
-		want []string
-	}{
-		{"a\nb\nc", "a\nb\nc", nil},
-		{"", "x", []string{"+ x"}},
-		{"x", "", []string{"- x"}},
-		{"a\nb\nc", "a\nc\nd", []string{"- b", "+ d"}},
-	} {
-		if got := lineDiff(splitLines(tc.a), splitLines(tc.b)); strings.Join(got, "|") != strings.Join(tc.want, "|") {
-			t.Errorf("lineDiff(%q, %q) = %q, want %q", tc.a, tc.b, got, tc.want)
-		}
+func TestLongChange(t *testing.T) {
+	if got := longChange("Description", "a\nb\nc", "a\nc\nd"); strings.Join(got, "|") != "- Description changed (5 → 5 chars)|    - b|    + d" {
+		t.Errorf("longChange = %q", got)
 	}
 	long := strings.Repeat("x", historyLineChars+10)
 	if got := longChange("Summary", "", long); !strings.HasSuffix(got[1], "…") {

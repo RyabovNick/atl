@@ -4,14 +4,13 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/RyabovNick/atl/internal/atlassian"
 	"github.com/RyabovNick/atl/internal/cli"
+	"github.com/RyabovNick/atl/internal/diff"
 )
 
 const (
@@ -51,23 +50,6 @@ type historyIssue struct {
 		Total     int      `json:"total"`
 		Histories []change `json:"histories"`
 	} `json:"changelog"`
-}
-
-func parseSince(s string, ref time.Time) (time.Time, error) {
-	if t, err := time.ParseInLocation("2006-01-02", s, time.Local); err == nil {
-		return t, nil
-	}
-	for suffix, days := range map[string]int{"d": 1, "w": 7} {
-		if n, ok := strings.CutSuffix(s, suffix); ok {
-			if count, err := strconv.Atoi(n); err == nil && count >= 0 {
-				return ref.AddDate(0, 0, -count*days), nil
-			}
-		}
-	}
-	if d, err := time.ParseDuration(s); err == nil && d >= 0 {
-		return ref.Add(-d), nil
-	}
-	return time.Time{}, cli.Fail(cli.ExitUsage, "--since takes a date (2026-10-01) or a duration (7d, 2w, 48h), not %q", s)
 }
 
 // fieldNames resolves changelog field labels: DC names system fields by id
@@ -116,38 +98,6 @@ func clip(s string, n int) string {
 	return s
 }
 
-// lineDiff is a longest-common-subsequence diff, returning only changed lines.
-func lineDiff(a, b []string) []string {
-	lcs := make([][]int, len(a)+1)
-	for i := range lcs {
-		lcs[i] = make([]int, len(b)+1)
-	}
-	for i, v := range slices.Backward(a) {
-		for j := len(b) - 1; j >= 0; j-- {
-			if v == b[j] {
-				lcs[i][j] = lcs[i+1][j+1] + 1
-			} else {
-				lcs[i][j] = max(lcs[i+1][j], lcs[i][j+1])
-			}
-		}
-	}
-	var out []string
-	i, j := 0, 0
-	for i < len(a) || j < len(b) {
-		switch {
-		case i < len(a) && j < len(b) && a[i] == b[j]:
-			i, j = i+1, j+1
-		case j == len(b) || (i < len(a) && lcs[i+1][j] >= lcs[i][j+1]):
-			out = append(out, "- "+a[i])
-			i++
-		default:
-			out = append(out, "+ "+b[j])
-			j++
-		}
-	}
-	return out
-}
-
 func longChange(name, from, to string) []string {
 	fromLen, toLen := len([]rune(from)), len([]rune(to))
 	var out []string
@@ -163,10 +113,15 @@ func longChange(name, from, to string) []string {
 	if len(a) > historyDiffInput || len(b) > historyDiffInput {
 		return out
 	}
-	diff := lineDiff(a, b)
-	for i, d := range diff {
+	var changed []string
+	for _, op := range diff.Lines(a, b) {
+		if op.Kind != diff.Equal {
+			changed = append(changed, fmt.Sprintf("%c %s", op.Kind, op.Text))
+		}
+	}
+	for i, d := range changed {
 		if i == historyDiffLines {
-			out = append(out, fmt.Sprintf("    … %d more changed lines", len(diff)-i))
+			out = append(out, fmt.Sprintf("    … %d more changed lines", len(changed)-i))
 			break
 		}
 		out = append(out, "    "+clip(d, historyLineChars))
@@ -200,7 +155,7 @@ func RunHistory(args []string, stdout, stderr io.Writer) error {
 	}
 	var cutoff time.Time
 	if *since != "" {
-		if cutoff, err = parseSince(*since, now()); err != nil {
+		if cutoff, err = cli.ParseSince(*since, now()); err != nil {
 			return err
 		}
 	}
