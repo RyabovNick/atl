@@ -25,6 +25,13 @@ const usage = `atl: read-only Jira and Confluence lookups
   atl page <id|url> [--toc] [--section H]... [--children [--depth N]] [--comments]
            [--max-chars N] [--json]          Confluence page as Markdown, its outline,
                                               chosen sections, child pages, or comments
+  atl page <id|url> --versions [--limit N] [--since DATE|7d] [--json]
+                                              who saved which version, newest first
+  atl page <id|url> --version N [--toc] [--section H]...
+                                              the page as it was at version N
+  atl page <id|url> --diff [--from N] [--to N | --since DATE|7d] [--max-chars N] [--json]
+                                              unified diff of the Markdown between two
+                                              versions, previous to current by default
   atl search <text> [--space KEY] [--cql] [--limit N] [--json]
                                               Confluence pages and blog posts
   atl doctor [--json]                         where each setting comes from, and
