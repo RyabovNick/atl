@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/RyabovNick/atl/internal/atlassian"
 	"github.com/RyabovNick/atl/internal/attachment"
@@ -31,11 +32,7 @@ type page struct {
 		Key  string `json:"key"`
 		Name string `json:"name"`
 	} `json:"space"`
-	Version struct {
-		Number int              `json:"number"`
-		When   string           `json:"when"`
-		By     *atlassian.Named `json:"by"`
-	} `json:"version"`
+	Version   version `json:"version"`
 	Ancestors []struct {
 		Title string `json:"title"`
 	} `json:"ancestors"`
@@ -230,7 +227,12 @@ viewpage.action?pageId=, /pages/<id>, /display/SPACE/Title, /x/<tiny>.
 --toc prints the headings with their sizes instead of the body, and --section
 prints only the matching sections. --children lists child pages instead of the
 body; add --toc or --section to get those as well. --comments adds footer and
-inline comments, with replies under the comment they answer.`, stderr)
+inline comments, with replies under the comment they answer.
+
+--versions lists who saved which version, newest first. --version N reads the
+page as it was at version N. --diff prints what changed between two versions as
+a unified diff of the Markdown: the previous and the current one by default, or
+--from and --to, or everything since a date with --since.`, stderr)
 	maxChars := fs.Int("max-chars", 40000, "truncate the body or sections to this many characters (0 = no limit)")
 	toc := fs.Bool("toc", false, "print the outline of headings with section sizes, not the body")
 	var sections stringsFlag
@@ -238,6 +240,13 @@ inline comments, with replies under the comment they answer.`, stderr)
 	children := fs.Bool("children", false, "list child pages instead of the body")
 	depth := fs.Int("depth", 1, "levels of child pages to list with --children (1-3)")
 	withComments := fs.Bool("comments", false, "include footer and inline comments with their replies")
+	versions := fs.Bool("versions", false, "list the page's versions instead of the body")
+	limit := fs.Int("limit", 20, "versions to list with --versions")
+	atVersion := fs.Int("version", 0, "read the page as it was at this version")
+	showDiff := fs.Bool("diff", false, "print the changes between two versions instead of the body")
+	from := fs.Int("from", -1, "with --diff, the older version (default: the one before --to; 0 = the empty page)")
+	to := fs.Int("to", 0, "with --diff, the newer version (default: the current one)")
+	since := fs.String("since", "", "with --diff or --versions, changes on or after a date (2026-10-01) or within a duration (7d, 2w, 48h)")
 	asJSON := fs.Bool("json", false, "print the raw API response (with --children or --comments, the page with those added)")
 	pos, err := cli.ParseFlags(fs, args)
 	if err != nil {
@@ -252,6 +261,31 @@ inline comments, with replies under the comment they answer.`, stderr)
 	if *asJSON && (*toc || len(sections) > 0) {
 		return cli.Fail(cli.ExitUsage, "--json prints the raw page; it does not combine with --toc or --section")
 	}
+	history := *versions || *showDiff
+	switch {
+	case *versions && *showDiff, *atVersion != 0 && history:
+		return cli.Fail(cli.ExitUsage, "--versions, --version and --diff do not combine")
+	case history && (*toc || len(sections) > 0 || *children || *withComments):
+		return cli.Fail(cli.ExitUsage, "--versions and --diff do not combine with --toc, --section, --children or --comments")
+	case *atVersion != 0 && (*children || *withComments):
+		return cli.Fail(cli.ExitUsage, "--version reads the body; it does not combine with --children or --comments")
+	case *atVersion < 0:
+		return cli.Fail(cli.ExitUsage, "--version must be 1 or more")
+	case *limit < 1:
+		return cli.Fail(cli.ExitUsage, "--limit must be 1 or more")
+	case (*from >= 0 || *to != 0) && !*showDiff:
+		return cli.Fail(cli.ExitUsage, "--from and --to need --diff")
+	case *since != "" && !history:
+		return cli.Fail(cli.ExitUsage, "--since needs --diff or --versions")
+	case *since != "" && (*from >= 0 || *to != 0):
+		return cli.Fail(cli.ExitUsage, "--since picks the versions to compare; it does not combine with --from or --to")
+	}
+	var cutoff time.Time
+	if *since != "" {
+		if cutoff, err = cli.ParseSince(*since, now()); err != nil {
+			return err
+		}
+	}
 	conf, err := atlassian.NewClient("confluence")
 	if err != nil {
 		return err
@@ -260,16 +294,27 @@ inline comments, with replies under the comment they answer.`, stderr)
 	if err != nil {
 		return err
 	}
-	needBody := !*children || *toc || len(sections) > 0
+	needBody := !history && (!*children || *toc || len(sections) > 0)
 	// children.comment only counts comments, so the output can say they exist.
 	expand := "space,version,ancestors,children.comment"
 	if needBody {
 		expand = "body.view," + expand
 	}
+	params := url.Values{"expand": {expand}}
+	if *atVersion > 0 {
+		params.Set("status", "historical")
+		params.Set("version", strconv.Itoa(*atVersion))
+	}
 	var p page
-	raw, err := conf.Get("/rest/api/content/"+id, url.Values{"expand": {expand}}, &p)
+	raw, err := conf.Get("/rest/api/content/"+id, params, &p)
 	if err != nil {
 		return err
+	}
+	switch {
+	case *versions:
+		return writeVersions(stdout, conf, p, *limit, cutoff, *asJSON)
+	case *showDiff:
+		return writeDiff(stdout, conf, p, diffRange{from: *from, to: *to, cutoff: cutoff}, *maxChars, *asJSON)
 	}
 	var kids []childPage
 	var truncatedKids bool

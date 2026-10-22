@@ -17,6 +17,8 @@ atl jql '<query>' [--limit N]       # Jira search
 atl history [KEY] [--since 7d]      # who changed what, oldest first
 atl attachment <ID...> | [KEY]      # download files; prints saved paths
 atl page <id|url> [--toc | --section "Heading"... | --children] [--comments]
+atl page <id|url> --diff [--since 7d | --from N --to M]   # what changed in a page
+atl page <id|url> --versions        # who saved which version
 atl search "<text>" [--space KEY] [--cql]
 atl doctor                          # config and login check
 ```
@@ -39,7 +41,10 @@ atl doctor                          # config and login check
    root to find sub-pages. When the output says `(page has comments; …)`,
    add `--comments` if the page looks stale or disputed: open questions and
    agreed changes often live there. Use `atl search` when the issue refers to docs
-   without linking them, with `--space` when you know it.
+   without linking them, with `--space` when you know it. When a spec may
+   have moved under you (it was edited after work started, or the code and
+   the page disagree), run `--diff --since <date>` to see exactly what
+   changed and who changed it, instead of rereading the whole page.
 4. **Attachments** listed under `## Attachments`: download the ones that hold
    evidence (logs, stack traces, configs, payloads, error screenshots) with
    `atl attachment <id>` and read the printed path. Open images only if you

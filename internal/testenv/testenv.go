@@ -220,12 +220,25 @@ func FakeServer(t *testing.T) *httptest.Server {
 		{"object":{"url":"https://github.com/x/y/pull/1","title":"PR 1"},"application":{}}
 	]`)
 
-	jsonReply("/wiki/rest/api/content/42", `{"id":"42","title":"Login spec","space":{"key":"DEV","name":"Development"},
-		"version":{"number":3,"when":"2026-09-30T12:00:00.000Z","by":{"displayName":"Ann"}},
-		"ancestors":[{"title":"Home"},{"title":"Auth"}],
-		"body":{"view":{"value":"<h2>Flow</h2><p>Users <strong>log in</strong>.</p><ul><li>one</li></ul>"}},
-		"children":{"comment":{"size":2}},
-		"_links":{"webui":"/display/DEV/Login+spec"}}`)
+	// Page 42 has three versions; status=historical&version=N reads an older one.
+	mux.HandleFunc("/wiki/rest/api/content/42", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(w, r) {
+			return
+		}
+		body := page42
+		if q := r.URL.Query(); q.Get("status") == "historical" {
+			if body = page42Versions[q.Get("version")]; body == "" {
+				http.NotFound(w, r)
+				return
+			}
+		}
+		fmt.Fprint(w, body)
+	})
+	jsonReply("/wiki/rest/experimental/content/42/version", `{"results":[
+		{"number":3,"when":"2026-09-30T12:00:00.000Z","by":{"displayName":"Ann"},"message":"Bold","minorEdit":true},
+		{"number":2,"when":"2026-09-20T10:00:00.000Z","by":{"displayName":"Cy"},"message":"Add list"},
+		{"number":1,"when":"2026-09-01T09:00:00.000Z","by":{"displayName":"Bob"},"message":""}
+	],"start":0,"limit":100,"size":3,"_links":{}}`)
 	// A footer thread with a reply listed before an unrelated inline comment, as depth=all can return them.
 	reply("/wiki/rest/api/content/42/child/comment", func(r *http.Request) string {
 		if q := r.URL.Query(); q.Get("depth") != "all" || !strings.Contains(q.Get("expand"), "body.view") {
@@ -383,6 +396,23 @@ func GitRepo(t *testing.T, branch string) {
 }
 
 const ChildCount = 52
+
+const page42 = `{"id":"42","title":"Login spec","space":{"key":"DEV","name":"Development"},
+	"version":{"number":3,"when":"2026-09-30T12:00:00.000Z","by":{"displayName":"Ann"},"message":"Bold"},
+	"ancestors":[{"title":"Home"},{"title":"Auth"}],
+	"body":{"view":{"value":"<h2>Flow</h2><p>Users <strong>log in</strong>.</p><ul><li>one</li></ul>"}},
+	"children":{"comment":{"size":2}},
+	"_links":{"webui":"/display/DEV/Login+spec"}}`
+
+// page42Versions are the older versions of page 42, by number.
+var page42Versions = map[string]string{
+	"1": `{"id":"42","title":"Login","space":{"key":"DEV","name":"Development"},
+		"version":{"number":1,"when":"2026-09-01T09:00:00.000Z","by":{"displayName":"Bob"}},
+		"body":{"view":{"value":"<h2>Flow</h2><p>Users log in.</p><h2>Old</h2><p>gone</p>"}}}`,
+	"2": `{"id":"42","title":"Login spec","space":{"key":"DEV","name":"Development"},
+		"version":{"number":2,"when":"2026-09-20T10:00:00.000Z","by":{"displayName":"Cy"},"message":"Add list"},
+		"body":{"view":{"value":"<h2>Flow</h2><p>Users log in.</p><ul><li>one</li></ul>"}}}`,
+}
 
 // outlineHTML is a page with nested, repeated and decoy headings: a '#' inside
 // fenced code and a heading inside a table cell are content, not structure.

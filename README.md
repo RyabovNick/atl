@@ -70,6 +70,10 @@ raw API response, or for `attachment` and `doctor` their own report.
 | `atl page <ref> --toc` | the page's headings, indented, with each section's size in characters |
 | `atl page <ref> --section <heading>` | only the matching sections, subsections included; repeatable |
 | `atl page <ref> --children [--depth 1-3]` | child pages with id, update time and URL, instead of the body |
+| `atl page <ref> --versions [--limit 20] [--since 7d]` | the page's versions, newest first, with author, time, edit message and minor-edit mark |
+| `atl page <ref> --version N` | the page as it was at version N; combines with `--toc` and `--section` |
+| `atl page <ref> --diff [--from N] [--to N]` | a unified diff of the page's Markdown between two versions (previous to current by default; `--from 0` is the empty page), with the edits in between, each hunk labeled with its section |
+| `atl page <ref> --diff --since 2026-10-01\|7d` | everything changed since a date, compared with the version that was current then |
 | `atl page <ref> --comments` | adds footer and inline comments (with the highlighted text and resolved status), replies under their thread; combines with the flags above |
 | `atl search <text> [--space KEY] [--cql] [--limit 10]` | pages and blog posts matching `text ~`, or raw CQL |
 | `atl doctor` | each setting and its source, then a login check per service |
@@ -92,6 +96,11 @@ config file is unusable).
 - **Sections.** `--section` matches case-insensitively: every section with
   exactly that title, else a unique prefix, else a unique substring. An
   ambiguous match exits 2, no match exits 4, both listing the headings.
+- **Page versions.** Data Center lists versions only through
+  `/rest/experimental/content/{id}/version`; where that is missing, atl reads
+  versions one at a time. `--diff` compares the Markdown that `atl page` would
+  print, not the storage format, so macro markup does not show up as changes.
+  Each `@@` line names the section the change falls in.
 - **Epics.** Children are `"Epic Link" = KEY OR parent = KEY` when the
   instance has the Epic Link field, `parent = KEY` otherwise.
 - **History.** Long text edits show their size change and a line diff capped

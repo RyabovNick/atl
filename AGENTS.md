@@ -30,6 +30,8 @@ network, Jira instance or token.
 - `internal/atlassian`: config (environment over `~/.config/atl/config.ini`)
   and the HTTP client.
 - `internal/markdown`: HTML to Markdown, and heading outlines and sections.
+- `internal/diff`: line diffs (Myers) and unified hunks, for Jira history and
+  Confluence page versions.
 - `internal/attachment`, `internal/jira`, `internal/confluence`,
   `internal/doctor`, `internal/install`: one package per command group. Each
   command is a `Run…(args []string, stdout, stderr io.Writer) error` function
